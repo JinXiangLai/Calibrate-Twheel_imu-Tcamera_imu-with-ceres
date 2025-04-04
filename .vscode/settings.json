@@ -1,0 +1,9 @@
+{
+    "files.autoSave": "afterDelay",
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/../build",
+        "--header-insertion=never"
+    ],
+    "clangd.inactiveRegions.opacity": 0.55,
+    "editor.semanticHighlighting": true
+}
