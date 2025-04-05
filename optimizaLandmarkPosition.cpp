@@ -79,6 +79,15 @@ class SolveLandmarkPosition {
     Eigen::Matrix3d K_;
 };
 
+/**
+ * @brief 拼接多张图像并绘制观测点匹配连线
+ * @param debugImgs 输入的图像列表（每个相机视角一张图）
+ * @param obvs 观测点列表（每个视角对应的观测像素坐标）
+ * @return cv::Mat 拼接后的图像
+ */
+cv::Mat stitchAndDrawMatches(const std::vector<cv::Mat>& debugImgs, 
+                            const std::vector<std::vector<Eigen::Vector2d>>& obvs);
+
 int main(int argc, char** argv) {
     //constexpr int X0 = 220, Y0 = 200; // 这个可能导致位置差异太大，导致无法收敛？测试显示并不是，那是为啥呢？
     // 原因应该是X、Y值差异过小，但又是为什么要这样呢？它们相对位置都差不多啊？
@@ -190,6 +199,10 @@ int main(int argc, char** argv) {
         for (int k = 0; k < debugImg.size(); ++k) {
             cv::imshow("img_" + to_string(k), debugImg[k]);
         }
+        cv::waitKey(0);
+
+        const cv::Mat mergeImg = stitchAndDrawMatches(debugImg, obvs);
+        cv::imshow("mergeImg_X0:"+to_string(X0)+"_Y0:"+to_string(Y0), mergeImg);
         cv::waitKey(0);
 
         SolveLandmarkPosition slp(Rc_w, Pc_w, obvs, K);
@@ -475,3 +488,75 @@ bool ProjectionResidual::Evaluate(double const* const* parameters,
     return true;
 }
 #endif
+
+cv::Mat stitchAndDrawMatches(const std::vector<cv::Mat>& debugImgs, 
+                            const std::vector<std::vector<Eigen::Vector2d>>& obvs) {
+    if (debugImgs.empty() || obvs.empty()) {
+        return cv::Mat();
+    }
+
+    // --- 1. 图像拼接 ---
+    // 计算拼接后的总宽度和最大高度
+    int totalWidth = 0;
+    int maxHeight = 0;
+    for (const auto& img : debugImgs) {
+        totalWidth += img.cols;
+        maxHeight = std::max(maxHeight, img.rows);
+    }
+
+    // 创建拼接画布
+    cv::Mat canvas(maxHeight, totalWidth, CV_8UC3, cv::Scalar(0, 0, 0));
+    
+    // 将图像横向拼接
+    int x_offset = 0;
+    for (const auto& img : debugImgs) {
+        cv::Mat roi = canvas(cv::Rect(x_offset, 0, img.cols, img.rows));
+        img.copyTo(roi);
+        x_offset += img.cols;
+    }
+
+    // --- 2. 绘制观测点连线 ---
+    const std::vector<cv::Scalar> colors = {
+        cv::Scalar(0, 255, 0),    // 绿色
+        cv::Scalar(0, 0, 255),     // 红色
+        cv::Scalar(255, 0, 0),     // 蓝色
+        cv::Scalar(255, 255, 0),   // 青色
+        cv::Scalar(255, 0, 255),   // 紫色
+        cv::Scalar(0, 255, 255)    // 黄色
+    };
+
+    // 遍历每个地图点（假设所有视角观测到相同数量的点）
+    for (size_t pt_idx = 0; pt_idx < obvs[0].size(); ++pt_idx) {
+        cv::Scalar color = colors[pt_idx % colors.size()];
+        
+        // 存储当前点在所有视角中的位置
+        std::vector<cv::Point> points;
+        int x_accum = 0;
+        
+        // 遍历每个视角
+        for (size_t view_idx = 0; view_idx < obvs.size(); ++view_idx) {
+            if (pt_idx >= obvs[view_idx].size()) continue;
+            
+            // 计算当前点在拼接图中的绝对坐标
+            const Eigen::Vector2d& obv = obvs[view_idx][pt_idx];
+            cv::Point pt(x_accum + obv.x(), obv.y());
+            points.push_back(pt);
+            
+            // 绘制当前视角的观测点
+            cv::circle(canvas, pt, 3, color, -1);
+            
+            // 如果是第一个视角，跳过连线
+            if (view_idx == 0) {
+                x_accum += debugImgs[view_idx].cols;
+                continue;
+            }
+            
+            // 绘制与前一视角的连线
+            cv::line(canvas, points[view_idx-1], points[view_idx], color, 1);
+            x_accum += debugImgs[view_idx].cols;
+        }
+    }
+
+    return canvas;
+}
+
