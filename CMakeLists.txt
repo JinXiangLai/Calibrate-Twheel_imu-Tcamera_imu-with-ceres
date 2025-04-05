@@ -26,7 +26,8 @@ include_directories(
 # 预先指定链接库
 link_libraries(
   Eigen3::Eigen
-  ceres
+  #ceres::ceres # 这样写就行不通
+  Ceres::ceres # 若是使用ceres会与opencv的冲突，所以必须要命名空间，这里的命名空间就是存放libceres.a的文件夹名字
   ${OpenCV_LIBS}
 )
 

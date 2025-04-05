@@ -12,7 +12,7 @@ AlignAfterOpenBracket: Align
 AllowAllArgumentsOnNextLine: true
 AllowAllConstructorInitializersOnNextLine: true
 AllowAllParametersOfDeclarationOnNextLine: false
-AllowShortBlocksOnASingleLine: Empty
+#AllowShortBlocksOnASingleLine: Empty
 AllowShortCaseLabelsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: Never  # To avoid conflict, set this "Never" and each "if statement" should include brace when coding
@@ -26,7 +26,7 @@ BraceWrapping:
   AfterCaseLabel: false
   AfterClass: false
   AfterStruct: false
-  AfterControlStatement: Never
+  #AfterControlStatement: Never
   AfterEnum: false
   AfterFunction: false
   AfterNamespace: false
@@ -71,7 +71,7 @@ SpaceBeforeCtorInitializerColon: true
 SpaceBeforeInheritanceColon: true
 SpaceBeforeParens: ControlStatements
 SpaceBeforeRangeBasedForLoopColon: true
-SpaceBeforeSquareBrackets: false
+#SpaceBeforeSquareBrackets: false
 SpaceInEmptyParentheses: false
 SpacesBeforeTrailingComments: 2
 SpacesInAngles: false
@@ -79,6 +79,6 @@ SpacesInCStyleCastParentheses: false
 SpacesInContainerLiterals: false
 SpacesInParentheses: false
 SpacesInSquareBrackets: false
-Standard: c++11
+#Standard: c++11
 TabWidth: 4
 UseTab: Never
