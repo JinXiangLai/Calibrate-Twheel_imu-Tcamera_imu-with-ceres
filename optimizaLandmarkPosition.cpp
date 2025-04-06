@@ -54,13 +54,13 @@ Eigen::Vector2d ProjectPw2Pixel(const Eigen::Vector3d& Pw,
 
 Eigen::Vector3d EstimatePwInitialValue(
     const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
-    const vector<vector<Eigen::Vector2d> >& obvs, const ::Eigen::Matrix3d& K);
+    const vector<vector<Eigen::Vector2d>>& obvs, const ::Eigen::Matrix3d& K);
 
 class SolveLandmarkPosition {
    public:
     SolveLandmarkPosition(const vector<Eigen::Matrix3d>& Rc_w,
                           const vector<Eigen::Vector3d>& Pc_w,
-                          const vector<vector<Eigen::Vector2d> >& obvs,
+                          const vector<vector<Eigen::Vector2d>>& obvs,
                           const Eigen::Matrix3d& _K,
                           const Eigen::Vector3d& priorPw = {0., 0., 0.});
     SolveLandmarkPosition() = delete;
@@ -72,7 +72,7 @@ class SolveLandmarkPosition {
    private:
     vector<Eigen::Matrix3d> Rc_w_;
     vector<Eigen::Vector3d> Pc_w_;
-    vector<vector<Eigen::Vector2d> > obvs_;
+    vector<vector<Eigen::Vector2d>> obvs_;
     Eigen::Vector3d priorPw_;  // 待估计变量
     Eigen::Vector3d optPw_;
     ceres::Problem problem_;
@@ -85,43 +85,73 @@ class SolveLandmarkPosition {
  * @param obvs 观测点列表（每个视角对应的观测像素坐标）
  * @return cv::Mat 拼接后的图像
  */
-cv::Mat stitchAndDrawMatches(const std::vector<cv::Mat>& debugImgs, 
-                            const std::vector<std::vector<Eigen::Vector2d>>& obvs);
+cv::Mat stitchAndDrawMatches(
+    const std::vector<cv::Mat>& debugImgs,
+    const std::vector<std::vector<Eigen::Vector2d>>& obvs);
 
 int main(int argc, char** argv) {
     //constexpr int X0 = 220, Y0 = 200; // 这个可能导致位置差异太大，导致无法收敛？测试显示并不是，那是为啥呢？
     // 原因应该是X、Y值差异过小，但又是为什么要这样呢？它们相对位置都差不多啊？
     // 解答：问题最终定位为运动的姿态角有关系，不同姿态角导致三角化初值误差很大，进而影响优化算法无法收敛，
     // 飞行器的姿态角变换不可能很大，所以我们最终需要有一个方向正确的先验！！！
-    int X0 = 120, Y0 = 200, D = 5;  // 为什么偏离图像中心反而可以
+    // 前面描述的都不对：真正的原因是三角化时没有把Z>0这个条件用进去，不对这也只是其中一个原因而已 {400, 330}越靠近中心越不行
+    int X0 = 120, Y0 = 200;  // 为什么偏离图像中心反而可以
+    // 设置一个平面点分布
+    double radius = 3.0;  // 这个设置得>=1.0就不行了，但是增加采样点数量就又行了
+    // 所以结论：
+    // 1. 和半径大小有关
+    // 2. 和采样点数量有关
+    // 3. 和运动方式有关
+    // 4. 和噪声大小有关
+    // 5. 最终影响先验估计值
+    // 6. SVD求解Ax=0过程中，+X与-X都是解，我们要保证取+X
+    // 设置一个在首个相机系下的深度
+    double depth = 50.0;
     bool usePrior = false;
+
+    printf(
+        "Default parameters:\n\tX0=%d, Y0=%d, radius=%f, depth=%f, "
+        "usePrior=%d,\n",
+        X0, Y0, radius, depth, usePrior);
     if (argc > 2) {
         X0 = atoi(argv[1]);
         Y0 = atoi(argv[2]);
     }
     if (argc > 3) {
-        D = atoi(argv[3]);
+        radius = atof(argv[3]);
     }
     if (argc > 4) {
-        usePrior = bool(atoi(argv[4]));
+        depth = atof(argv[4]);
     }
-    cout << "X0, Y0: " << X0 << ", " << Y0 << endl;
-
-    // 设置一个在首个相机系下的深度
-    const double depth = 50.0;
-    if (noiseStd == 0.) {  // debug测试
-        //D = 0;
+    if (argc > 5) {
+        usePrior = bool(atoi(argv[5]));
     }
-    // 设置一系列的观测像素点，假设这些点均有相同的深度值
-    const vector<Eigen::Vector2d> obv0 = {
-        {X0, Y0},     {X0 - D, Y0},     {X0 + D, Y0},    {X0, Y0 - D},
-        {X0, Y0 + D}, {X0 - D, Y0 - D}, {X0 + D, Y0 + D}};
+    printf(
+        "Current parameters:\n\tX0=%d, Y0=%d, radius=%f,  depth=%f, "
+        "usePrior=%d\n",
+        X0, Y0, radius, depth, usePrior);
 
-    // 求取仿真世界点坐标
-    Eigen::MatrixXd Pws(3, obv0.size());
-    for (int i = 0; i < obv0.size(); ++i) {
-        const Eigen::Vector3d px(obv0[i][0], obv0[i][1], 1.0);
-        Pws.col(i) = depth * invK * px;
+    const Eigen::Vector3d Pw0 = depth * invK * Eigen::Vector3d(X0, Y0, 1);
+
+    // 设置其它点的方向向量
+    vector<Eigen::Vector3d> directions = {{1, 1, 0},   {-1, 1, 0}, {-1, -1, 0},
+                                          {1, -1, 0},  {1, 3, 0},  {-1, 2, 0},
+                                          {-1, -4, 0}, {1, 4, 0}};
+    //vector<Eigen::Vector3d> directions = {
+    //    {1, 1, 0},
+    //    {-1, 1, 0},
+    //    {-1, -1, 0},
+    //    {1, -1, 0},
+    //};
+    for (Eigen::Vector3d& dir : directions) {
+        dir.normalize();
+    }
+
+    // 求取仿真同平面世界点坐标
+    Eigen::MatrixXd Pws(3, directions.size() + 1);
+    Pws.col(0) = Pw0;
+    for (int i = 1; i < Pws.cols(); ++i) {
+        Pws.col(i) = Pw0 + radius * directions[i - 1];
     }
     cout << "Pws:\n" << Pws << endl;
     // 统计一下均值和方差
@@ -161,12 +191,12 @@ int main(int argc, char** argv) {
     vector<Eigen::Matrix3d> historyCov;
     for (int t = 0; t < loopTime; ++t) {
 
-        vector<vector<Eigen::Vector2d> > obvs(vecPw.size());
+        vector<vector<Eigen::Vector2d>> obvs(vecPw.size());
         vector<cv::Mat> debugImg(vecPw.size());
 
         random_device rd;
         mt19937 gen(rd());
-
+        cout << "noiseStd: " << noiseStd << endl;
         normal_distribution<double> dist(0.0, noiseStd);
         //cv::Mat img(kImgHeight, kImgWidth, CV_8UC3, {0, 0, 0});
         // 产生一些图像观测，并添加噪声
@@ -202,7 +232,8 @@ int main(int argc, char** argv) {
         cv::waitKey(0);
 
         const cv::Mat mergeImg = stitchAndDrawMatches(debugImg, obvs);
-        cv::imshow("mergeImg_X0:"+to_string(X0)+"_Y0:"+to_string(Y0), mergeImg);
+        cv::imshow("mergeImg_X0:" + to_string(X0) + "_Y0:" + to_string(Y0),
+                   mergeImg);
         cv::waitKey(0);
 
         SolveLandmarkPosition slp(Rc_w, Pc_w, obvs, K);
@@ -307,7 +338,7 @@ Eigen::Vector2d ProjectPw2Pixel(const Eigen::Vector3d& Pw,
 
 Eigen::Vector3d EstimatePwInitialValue(
     const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
-    const vector<vector<Eigen::Vector2d> >& obvs, const Eigen::Matrix3d& K) {
+    const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& K) {
     // px2 = ρ2 * K * [Rcw, Pcw] * Pw
     // [px2]x * px2 = [px2]x * K * [Rcw, Pcw] * Pw = 0
     Eigen::MatrixXd A;
@@ -331,12 +362,18 @@ Eigen::Vector3d EstimatePwInitialValue(
     // cout << "A:\n" << A << endl;
     cout << "singularValues: " << svd.singularValues().transpose() << endl;
     // cout << "est Pw: " << estPw.transpose() << endl;
+    if (estPw.z() < 0) {
+        // 原因是这里有时候会解算出负值，根据Ax=0，x的正负不影响结果，
+        // 因此需要加一个先验判断
+        return -estPw;
+        ;
+    }
     return estPw;
 }
 
 SolveLandmarkPosition::SolveLandmarkPosition(
     const vector<Eigen::Matrix3d>& Rc_w, const vector<Eigen::Vector3d>& Pc_w,
-    const vector<vector<Eigen::Vector2d> >& obvs, const Eigen::Matrix3d& _K,
+    const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& _K,
     const Eigen::Vector3d& priorPw)
     : Rc_w_(Rc_w), Pc_w_(Pc_w), obvs_(obvs), priorPw_(priorPw), K_(_K) {}
 
@@ -471,7 +508,7 @@ bool ProjectionResidual::Evaluate(double const* const* parameters,
     if (jacobians) {
         if (jacobians[0]) {
             // Evaluate函数中的雅可比是关于环境维度的，所以维度是[3x4]
-            Eigen::Map<Eigen::Matrix<double, 2, 3, Eigen::RowMajor> > j(
+            Eigen::Map<Eigen::Matrix<double, 2, 3, Eigen::RowMajor>> j(
                 jacobians[0]);
             j.setZero();
             const Eigen::Matrix<double, 2, 3> J_r_Pn = K.block(0, 0, 2, 3);
@@ -489,8 +526,9 @@ bool ProjectionResidual::Evaluate(double const* const* parameters,
 }
 #endif
 
-cv::Mat stitchAndDrawMatches(const std::vector<cv::Mat>& debugImgs, 
-                            const std::vector<std::vector<Eigen::Vector2d>>& obvs) {
+cv::Mat stitchAndDrawMatches(
+    const std::vector<cv::Mat>& debugImgs,
+    const std::vector<std::vector<Eigen::Vector2d>>& obvs) {
     if (debugImgs.empty() || obvs.empty()) {
         return cv::Mat();
     }
@@ -506,7 +544,7 @@ cv::Mat stitchAndDrawMatches(const std::vector<cv::Mat>& debugImgs,
 
     // 创建拼接画布
     cv::Mat canvas(maxHeight, totalWidth, CV_8UC3, cv::Scalar(0, 0, 0));
-    
+
     // 将图像横向拼接
     int x_offset = 0;
     for (const auto& img : debugImgs) {
@@ -518,45 +556,45 @@ cv::Mat stitchAndDrawMatches(const std::vector<cv::Mat>& debugImgs,
     // --- 2. 绘制观测点连线 ---
     const std::vector<cv::Scalar> colors = {
         cv::Scalar(0, 255, 0),    // 绿色
-        cv::Scalar(0, 0, 255),     // 红色
-        cv::Scalar(255, 0, 0),     // 蓝色
-        cv::Scalar(255, 255, 0),   // 青色
-        cv::Scalar(255, 0, 255),   // 紫色
-        cv::Scalar(0, 255, 255)    // 黄色
+        cv::Scalar(0, 0, 255),    // 红色
+        cv::Scalar(255, 0, 0),    // 蓝色
+        cv::Scalar(255, 255, 0),  // 青色
+        cv::Scalar(255, 0, 255),  // 紫色
+        cv::Scalar(0, 255, 255)   // 黄色
     };
 
     // 遍历每个地图点（假设所有视角观测到相同数量的点）
     for (size_t pt_idx = 0; pt_idx < obvs[0].size(); ++pt_idx) {
         cv::Scalar color = colors[pt_idx % colors.size()];
-        
+
         // 存储当前点在所有视角中的位置
         std::vector<cv::Point> points;
         int x_accum = 0;
-        
+
         // 遍历每个视角
         for (size_t view_idx = 0; view_idx < obvs.size(); ++view_idx) {
-            if (pt_idx >= obvs[view_idx].size()) continue;
-            
+            if (pt_idx >= obvs[view_idx].size())
+                continue;
+
             // 计算当前点在拼接图中的绝对坐标
             const Eigen::Vector2d& obv = obvs[view_idx][pt_idx];
             cv::Point pt(x_accum + obv.x(), obv.y());
             points.push_back(pt);
-            
+
             // 绘制当前视角的观测点
             cv::circle(canvas, pt, 3, color, -1);
-            
+
             // 如果是第一个视角，跳过连线
             if (view_idx == 0) {
                 x_accum += debugImgs[view_idx].cols;
                 continue;
             }
-            
+
             // 绘制与前一视角的连线
-            cv::line(canvas, points[view_idx-1], points[view_idx], color, 1);
+            cv::line(canvas, points[view_idx - 1], points[view_idx], color, 1);
             x_accum += debugImgs[view_idx].cols;
         }
     }
 
     return canvas;
 }
-
