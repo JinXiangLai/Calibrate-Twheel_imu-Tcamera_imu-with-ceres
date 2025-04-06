@@ -6,7 +6,7 @@ using namespace std;
 #define USE_AUTO_DIFF 1
 
 constexpr double huberTH = 5.99;
-constexpr double noiseStd = 0.0;
+constexpr double noiseStd = 3.0;
 constexpr double INF = 1e20;
 constexpr int ceresMaxIterativeTime = 1000;
 
@@ -89,12 +89,21 @@ cv::Mat stitchAndDrawMatches(
     const std::vector<cv::Mat>& debugImgs,
     const std::vector<std::vector<Eigen::Vector2d>>& obvs);
 
+// 直接利用对地高度计算初值
+Eigen::Vector3d CalculatePriorPwByHeight(const Eigen::Matrix3d& Rwc,
+                                         const Eigen::Vector3d& Pwc,
+                                         const double& horizontalHeight,
+                                         const Eigen::Matrix3d& K,
+                                         const vector<Eigen::Vector2d>& obvs);
+
 int main(int argc, char** argv) {
     //constexpr int X0 = 220, Y0 = 200; // 这个可能导致位置差异太大，导致无法收敛？测试显示并不是，那是为啥呢？
     // 原因应该是X、Y值差异过小，但又是为什么要这样呢？它们相对位置都差不多啊？
     // 解答：问题最终定位为运动的姿态角有关系，不同姿态角导致三角化初值误差很大，进而影响优化算法无法收敛，
     // 飞行器的姿态角变换不可能很大，所以我们最终需要有一个方向正确的先验！！！
-    // 前面描述的都不对：真正的原因是三角化时没有把Z>0这个条件用进去，不对这也只是其中一个原因而已 {400, 330}越靠近中心越不行
+    // 前面描述的都不对：真正的原因是三角化时没有把Z>0这个条件用进去，
+    // 不对这也只是其中一个原因而已 {400, 330}越靠近中心越不行，这是为什么呢？
+    // 目前的解决方案是基于对地高度来给出initPw估计
     int X0 = 120, Y0 = 200;  // 为什么偏离图像中心反而可以
     // 设置一个平面点分布
     double radius = 3.0;  // 这个设置得>=1.0就不行了，但是增加采样点数量就又行了
@@ -106,7 +115,7 @@ int main(int argc, char** argv) {
     // 5. 最终影响先验估计值
     // 6. SVD求解Ax=0过程中，+X与-X都是解，我们要保证取+X
     // 设置一个在首个相机系下的深度
-    double depth = 50.0;
+    double depth = 50.0;  // 认为是对地高度
     bool usePrior = false;
 
     printf(
@@ -236,11 +245,22 @@ int main(int argc, char** argv) {
                    mergeImg);
         cv::waitKey(0);
 
+        // 利用对地高度计算初值，因为X logo被认为是在地面即d=0，但现在让其为depth=50，
+        // 因此我参考系也要往上平移50
+        Eigen::Vector3d priorPw = Eigen::Vector3d::Zero();
+        for (int i = 0; i < Pc_w.size(); ++i) {
+            priorPw += CalculatePriorPwByHeight(Rc_w[i].transpose(),
+                                                -Rc_w[i].transpose() * Pc_w[i],
+                                                depth, K, obvs[i]);
+        }
+        priorPw /= Pc_w.size();
+        cout << "CalculatePriorPwByHeight: " <<  priorPw.transpose() << endl;
+
         SolveLandmarkPosition slp(Rc_w, Pc_w, obvs, K);
         if (usePrior) {
             // 给一个很不准，但是方向正确的试试，
             // Shame，无法得到正确结果
-            slp.SetPriorPw(Pws.col(0) * 0.1);
+            slp.SetPriorPw(priorPw);
         }
         const Eigen::Vector3d optPw = slp.Optimize();
         const Eigen::Matrix3d cov = slp.EstimateCovariance();
@@ -249,7 +269,7 @@ int main(int argc, char** argv) {
 
         cout << "initPw: " << initPw.transpose() << endl;
         cout << "optPw: " << optPw.transpose() << endl;
-        cout << "cov:\n"
+        cout << "std: "
              << cov.diagonal().array().sqrt().transpose() << endl
              << endl;
     }
@@ -365,6 +385,7 @@ Eigen::Vector3d EstimatePwInitialValue(
     if (estPw.z() < 0) {
         // 原因是这里有时候会解算出负值，根据Ax=0，x的正负不影响结果，
         // 因此需要加一个先验判断
+        // 但是也存在着这里解算不准的情况，因此需要加一个由对地高度直接解算位置的先验
         return -estPw;
         ;
     }
@@ -551,6 +572,8 @@ cv::Mat stitchAndDrawMatches(
         cv::Mat roi = canvas(cv::Rect(x_offset, 0, img.cols, img.rows));
         img.copyTo(roi);
         x_offset += img.cols;
+        // 这里画一个竖条纹，以区分不同帧
+        cv::line(canvas, {x_offset, 0}, {x_offset, img.rows-1}, {255, 255, 255}, 2);
     }
 
     // --- 2. 绘制观测点连线 ---
@@ -597,4 +620,32 @@ cv::Mat stitchAndDrawMatches(
     }
 
     return canvas;
+}
+
+Eigen::Vector3d CalculatePriorPwByHeight(const Eigen::Matrix3d& Rwc,
+                                         const Eigen::Vector3d& Pwc,
+                                         const double& horizontalHeight,
+                                         const Eigen::Matrix3d& K,
+                                         const vector<Eigen::Vector2d>& obvs) {
+    Eigen::Vector3d sumPw = Eigen::Vector3d::Zero();
+    // 相机在W下表示的与X logo所在水平面的距离，
+    // 这里是由相机->水平面的向量
+    const double dw = horizontalHeight - Pwc.z();
+    const Eigen::Vector3d Pw(0, 0, dw);
+
+    // 将W系下表示的距离变换到C系下
+    const double dc = Rwc.transpose().row(2)[2] * dw;
+    printf("dw=%f, dc=%f\n", dw, dc);
+
+    // 先计算在相机系下的坐标，再转到世界系
+    for (const Eigen::Vector2d& px : obvs) {
+        const Eigen::Vector3d Pc =
+            //dc * invK * Eigen::Vector3d(px[0], px[1], 1.0);
+            dw * invK * Eigen::Vector3d(px[0], px[1], 1.0);
+
+        // 转换到世界系下的位置
+        sumPw += Rwc * Pc;
+    }
+
+    return sumPw / obvs.size();
 }
