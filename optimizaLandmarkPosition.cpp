@@ -9,10 +9,17 @@ constexpr double noiseStd = 3.0;
 constexpr double noiseStd2 = noiseStd * noiseStd;
 constexpr double INF = 1e20;
 constexpr int ceresMaxIterativeTime = 1000;
-constexpr double kMinBaseline = 0.5;
 
-// 每次量测更新时所需要的最少帧数量
+// 每次量测更新时所需要的最少帧数量，比这个更重要的是基线长度
 constexpr int kMinUpdateFrameNumEachTime = 3;
+// 姿态、观测条件都一样的情况下，最影响地图点位置不确定度的只有基线
+// 其次就是量测的个数了，如果基线长短不断变换，那么标准差自然来回波动，
+// 如果累积基线长度不断增大，那么标准差自然不断减小，
+// 问题是：如何把先验转换为累积基线，以降低标准差
+constexpr double kMinUpdateBaselineInSW = 6.5;
+// 一个可行的办法是增大先验的权重，这样就能每次降低不确定度，且必须增长够快，如线性增长
+// 才能使std不断下降，这是因为W增大，海森矩阵H增大，而最终的方差与H矩阵的逆正相关
+#define ExpandPriorWeightAccordingToAccumulateBaseline 1
 
 #if USE_AUTO_DIFF
 // 定义误差函数，自动求导条件下，不需定义Evaluate函数，但必须提供operator()函数以计算残差
@@ -120,7 +127,10 @@ Eigen::Vector3d CalculatePriorPwByHeight(const Eigen::Matrix3d& Rwc,
 bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
                                 const vector<Eigen::Vector3d>& historyEstPw,
                                 const vector<Eigen::Matrix3d>& historyEstCov,
-                                Eigen::Vector3d& optPw, Eigen::Matrix3d& cov);
+                                const double& accumulateBaseline,
+                                const double& lastUpdateAccBaseline,
+                                const int updateTime, Eigen::Vector3d& optPw,
+                                Eigen::Matrix3d& cov);
 
 int main(int argc, char** argv) {
     //constexpr int X0 = 220, Y0 = 200; // 这个可能导致位置差异太大，导致无法收敛？测试显示并不是，那是为啥呢？
@@ -212,6 +222,8 @@ int main(int argc, char** argv) {
 
     // 滑动窗口
     deque<DataFrame> slidingWindow;
+    double accumulateBaseline = 0.0;
+    double lastUpdateAccBaseline = 0.0;
     deque<cv::Mat> debugImgs;
     deque<vector<Eigen::Vector2d>> debugObvs;
 
@@ -222,100 +234,126 @@ int main(int argc, char** argv) {
     const Eigen::Vector2d moveRange(0.01, 0.1);  // meter
     //const Eigen::Vector2d moveRange(5, 10);  // meter
 
-    for (int i = 0; i <= maxUpdateTime; ++i) {
+    int updateTime = 0;
+    while (updateTime < maxUpdateTime) {
+        //random_device rd; // 不使用真随机数
+        mt19937 gen1(42), gen2(43);
+        uniform_real_distribution<double> rd(rotRange.x(), rotRange.y());
+        uniform_real_distribution<double> md(moveRange.x(), moveRange.y());
 
-        while (slidingWindow.size() < kMinUpdateFrameNumEachTime) {
-            //random_device rd; // 不使用真随机数
-            mt19937 gen1(42), gen2(43);
-            uniform_real_distribution<double> rd(rotRange.x(), rotRange.y());
-            uniform_real_distribution<double> md(moveRange.x(), moveRange.y());
+        // 生成旋转及平移大小
+        const double rotAng = rd(gen1);
+        const double moveDist = md(gen2);
+        // 生成旋转及平移方向
+        Eigen::Vector3d rotDir(0, 0, 1);  // 主要绕Z轴，不然就翻车了
+        Eigen::Vector3d posDir(md(gen2), md(gen2),
+                               md(gen2));  // 沿任何轴平移均可
 
-            // 生成旋转及平移大小
-            const double rotAng = rd(gen1);
-            const double moveDist = md(gen2);
-            // 生成旋转及平移方向
-            Eigen::Vector3d rotDir(0, 0, 1);  // 主要绕Z轴，不然就翻车了
-            Eigen::Vector3d posDir(md(gen2), md(gen2),
-                                   md(gen2));  // 沿任何轴平移均可
-
-            // 产生下一个位姿
-            Eigen::Matrix3d Rw_c2;
-            Eigen::Vector3d Pw_c2;
-            GenerateNextPose(lastRw_c, lastPw_c, rotDir, posDir, rotAng,
-                             moveDist, Rw_c2, Pw_c2);
-            lastRw_c = Rw_c2;
-            lastPw_c = Pw_c2;
-
-            // 计算投影观测，并产生一帧DataFrame
-            vector<Eigen::Vector2d> obvs;
-            mt19937 gen(44);
-            cout << "noiseStd: " << noiseStd << endl;
-            normal_distribution<double> dist(0.0, noiseStd);
-            // 遍历每一个世界点，将其投影到当前帧
-            const Eigen::Matrix3d& Rc_w = Rw_c2.transpose();
-            const Eigen::Vector3d& Pc_w =
-                Rc_w * (-Pw_c2);  // 先将相对向量转向，再转到另一个坐标系下
-
-            cv::Mat debugImg(kImgHeight, kImgWidth, CV_8UC3);
-            debugImg.setTo(cv::Scalar(0, 0, 0));
-            // 遍历每一个世界点，计算投影点
-            for (int j = 0; j < Pws.cols(); ++j) {
-                const Eigen::Vector3d& Pw = Pws.col(j);
-                // 这里其实也要考虑位姿的扰动误差
-                const Eigen::Vector2d _obv = ProjectPw2Pixel(Pw, Rc_w, Pc_w);
-
-                const Eigen::Vector2d noise{dist(gen), dist(gen)};
-                const Eigen::Vector2d _obv_noisy = _obv + noise;
-                obvs.push_back(_obv_noisy);
-
-                //cout << "noise: " << noise.transpose() << endl;
-                //cout << "obv: " << _obv.transpose() << endl;
-
-                cv::circle(debugImg, cv::Point2i(_obv[0], _obv[1]), 1,
-                           cv::Scalar(0, 255, 0), -1);
-                cv::circle(debugImg, cv::Point2i(_obv_noisy[0], _obv_noisy[1]),
-                           1, {0, 0, 255}, -1);
-            }
-
-            // 位姿添加到滑窗
-            DataFrame frame(Rw_c2.transpose(), Rw_c2.transpose() * -Pw_c2,
-                            depth, obvs, double(i));
-            slidingWindow.push_back(frame);
-            debugObvs.push_back(obvs);
-            debugImgs.push_back(debugImg);
-            // 不能使用编号，因为sw窗口大小固定
-            //cv::imshow("debugImg" + to_string(slidingWindow.size()), debugImg);
-            cv::imshow("debugImg" + to_string(0), debugImg);
-            cv::waitKey(0);
-            if (slidingWindow.size() < kMinUpdateFrameNumEachTime) {
-                continue;
-            }
-
-            // 显示debug可视化信息
-            const cv::Mat mergeImg = stitchAndDrawMatches(debugImgs, debugObvs);
-            cv::imshow("mergeImg_X0:" + to_string(X0) + "_Y0:" + to_string(Y0),
-                       mergeImg);
-
-            cv::waitKey(0);
-            // 执行一次滑窗优化，并弹出最老一帧
-            Eigen::Vector3d optPw;
-            Eigen::Matrix3d cov;
-            SlidingWindowSolvedByCeres(slidingWindow, historyEstPw,
-                                       historyEstCov, optPw, cov);
-            historyEstPw.push_back(optPw);
-            historyEstCov.push_back(cov);
-            while (slidingWindow.size() >= kMinUpdateFrameNumEachTime) {
-                slidingWindow.pop_front();
-                debugImgs.pop_front();
-                debugObvs.pop_front();
-            }
-
-            // 打印输出
-            //cout << "initPw: " << initPw.transpose() << endl;
-            cout << "optPw: " << optPw.transpose() << endl;
-            cout << "std: " << cov.diagonal().array().sqrt().transpose() << endl
-                 << endl;
+        // 产生下一个位姿
+        Eigen::Matrix3d Rw_c2;
+        Eigen::Vector3d Pw_c2;
+        GenerateNextPose(lastRw_c, lastPw_c, rotDir, posDir, rotAng, moveDist,
+                         Rw_c2, Pw_c2);
+        lastRw_c = Rw_c2;
+        lastPw_c = Pw_c2;
+        if (!slidingWindow.empty()) {
+            const DataFrame& f = slidingWindow.back();
+            double moveDist =
+                (-f.Rc_w.transpose() * f.Pc_w + Rw_c2.transpose() * Pw_c2)
+                    .norm();
+            accumulateBaseline += moveDist;
         }
+
+        // 计算投影观测，并产生一帧DataFrame
+        vector<Eigen::Vector2d> obvs;
+        mt19937 gen(44);
+        cout << "noiseStd: " << noiseStd << endl;
+        normal_distribution<double> dist(0.0, noiseStd);
+        // 遍历每一个世界点，将其投影到当前帧
+        const Eigen::Matrix3d& Rc_w = Rw_c2.transpose();
+        const Eigen::Vector3d& Pc_w =
+            Rc_w * (-Pw_c2);  // 先将相对向量转向，再转到另一个坐标系下
+
+        cv::Mat debugImg(kImgHeight, kImgWidth, CV_8UC3);
+        debugImg.setTo(cv::Scalar(0, 0, 0));
+        // 遍历每一个世界点，计算投影点
+        for (int j = 0; j < Pws.cols(); ++j) {
+            const Eigen::Vector3d& Pw = Pws.col(j);
+            // 这里其实也要考虑位姿的扰动误差
+            const Eigen::Vector2d _obv = ProjectPw2Pixel(Pw, Rc_w, Pc_w);
+
+            const Eigen::Vector2d noise{dist(gen), dist(gen)};
+            const Eigen::Vector2d _obv_noisy = _obv + noise;
+            obvs.push_back(_obv_noisy);
+
+            //cout << "noise: " << noise.transpose() << endl;
+            //cout << "obv: " << _obv.transpose() << endl;
+
+            cv::circle(debugImg, cv::Point2i(_obv[0], _obv[1]), 1,
+                       cv::Scalar(0, 255, 0), -1);
+            cv::circle(debugImg, cv::Point2i(_obv_noisy[0], _obv_noisy[1]), 1,
+                       {0, 0, 255}, -1);
+        }
+
+        // 位姿添加到滑窗
+        DataFrame frame(Rw_c2.transpose(), Rw_c2.transpose() * -Pw_c2, depth,
+                        obvs, double(updateTime));
+        slidingWindow.push_back(frame);
+        debugObvs.push_back(obvs);
+        debugImgs.push_back(debugImg);
+
+        // 不能使用编号，因为sw窗口大小固定
+        //cv::imshow("debugImg" + to_string(slidingWindow.size()), debugImg);
+        //cv::imshow("debugImg" + to_string(0), debugImg);
+        //cv::waitKey(0);
+
+        // 不仅考虑滑窗大小，还得考虑基线
+        //if (slidingWindow.size() < kMinUpdateFrameNumEachTime ||
+        //    accumulateBaseline - lastUpdateAccBaseline <
+        //        kMinUpdateBaselineInSW) {
+        if (slidingWindow.size() < kMinUpdateFrameNumEachTime) {
+            continue;
+        }
+
+        // 显示debug合并可视化信息
+        const cv::Mat mergeImg = stitchAndDrawMatches(debugImgs, debugObvs);
+        cv::imshow("mergeImg_X0:" + to_string(X0) + "_Y0:" + to_string(Y0),
+                   mergeImg);
+        cv::waitKey(0);
+
+        // 执行一次滑窗优化，并弹出最老一帧
+        Eigen::Vector3d optPw;
+        Eigen::Matrix3d cov;
+        SlidingWindowSolvedByCeres(slidingWindow, historyEstPw, historyEstCov,
+                                   accumulateBaseline, lastUpdateAccBaseline,
+                                   updateTime, optPw, cov);
+        historyEstPw.push_back(optPw);
+        historyEstCov.push_back(cov);
+        printf("accBaseline - lastAcc: %f-%f=%f\nSW size=%ld\n",
+               accumulateBaseline, lastUpdateAccBaseline,
+               (accumulateBaseline - lastUpdateAccBaseline),
+               slidingWindow.size());
+        lastUpdateAccBaseline = accumulateBaseline;
+        ++updateTime;
+
+        // 移除滑动窗口元素
+        auto MoveSlidingWindow = [&slidingWindow, &debugImgs,
+                                  &debugObvs]() -> void {
+            slidingWindow.pop_front();
+            debugImgs.pop_front();
+            debugObvs.pop_front();
+        };
+        //while (slidingWindow.size() >= kMinUpdateFrameNumEachTime) {
+        //    MoveSlidingWindow();
+        //}
+        // 仅移动一个
+        MoveSlidingWindow();
+
+        // 打印输出
+        //cout << "initPw: " << initPw.transpose() << endl;
+        cout << "optPw: " << optPw.transpose() << endl;
+        cout << "std: " << cov.diagonal().array().sqrt().transpose() << endl
+             << endl;
     }
 
     /*
@@ -825,7 +863,10 @@ bool PriorPwResidual::Evaluate(double const* const* parameters,
 bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
                                 const vector<Eigen::Vector3d>& historyEstPw,
                                 const vector<Eigen::Matrix3d>& historyEstCov,
-                                Eigen::Vector3d& optPw, Eigen::Matrix3d& cov) {
+                                const double& accumulateBaseline,
+                                const double& lastUpdateAccBaseline,
+                                const int updateTime, Eigen::Vector3d& optPw,
+                                Eigen::Matrix3d& cov) {
     vector<Eigen::Matrix3d> Rc_w(slidingWindow.size());
     vector<Eigen::Vector3d> Pc_w(slidingWindow.size());
     vector<double> height2Ground(slidingWindow.size());
@@ -865,8 +906,15 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
         const Eigen::Matrix3d V = e.eigenvectors().real();
         priorWeight = V * sqrtS * V.transpose();
         cout << "_cov.inverse:\n" << _cov.inverse() << endl;
-        cout << "priorWeight*priorWeight:\n" << priorWeight * priorWeight << endl;
+        cout << "priorWeight*priorWeight:\n"
+             << priorWeight * priorWeight << endl;
         cout << "priorWeight:\n" << priorWeight << endl;
+
+        // 利用历史更新基线长度来提升先验权重，以期降低不确定度？？？？
+#if ExpandPriorWeightAccordingToAccumulateBaseline
+        //priorWeight *= accumulateBaseline / lastUpdateAccBaseline * updateTime;
+        priorWeight *= accumulateBaseline / lastUpdateAccBaseline;
+#endif
     }
 
     SolveLandmarkPosition slp(Rc_w, Pc_w, obvs, K);
