@@ -78,6 +78,8 @@ Eigen::Vector2d ProjectPw2Pixel(const Eigen::Vector3d& Pw,
                                 const Eigen::Matrix3d& Rcw,
                                 const Eigen::Vector3d& Pcw);
 
+// 实际实验发现，只要方向对就行，尽管初值很不准，但在所估计的初值方向附近
+// 只有最优值这么一个极小值，去验证吧！
 Eigen::Vector3d EstimatePwInitialValue(
     const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
     const vector<vector<Eigen::Vector2d>>& obvs, const ::Eigen::Matrix3d& K);
@@ -563,6 +565,7 @@ Eigen::Vector3d EstimatePwInitialValue(
         svd.matrixV().col(svd.singularValues().size() - 1);
     const Eigen::Vector3d estPw = bestV.head(3) / bestV[3];
     // cout << "A:\n" << A << endl;
+    // 这里有一个0空间，若要有解，则最后一个特征值要极小
     cout << "singularValues: " << svd.singularValues().transpose() << endl;
     // cout << "est Pw: " << estPw.transpose() << endl;
     if (estPw.z() < 0) {
@@ -652,7 +655,7 @@ Eigen::Matrix3d SolveLandmarkPosition::EstimateCovariance() {
     Eigen::Matrix<double, 3, 3, Eigen::RowMajor> covMatrix;
     covMatrix.setConstant(INF);
     if (!covariance.Compute({optPw_.data()}, &problem_)) {
-        cerr << "Failed to compute covariance." << endl;
+        cerr << "Failed to compute covariance！！！" << endl;
     } else {
         covariance.GetCovarianceBlock(optPw_.data(), optPw_.data(),
                                       covMatrix.data());
@@ -885,6 +888,9 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
     Eigen::Vector3d priorPw = Eigen::Vector3d::Zero();
     Eigen::Matrix3d priorWeight = Eigen::Matrix3d::Zero();
     if (historyEstPw.empty()) {
+#define CalculateInitPwByDLT 1
+
+#if !CalculateInitPwByDLT
         for (int i = 0; i < Pc_w.size(); ++i) {
             cout << "Pw_c[" << i
                  << "]: " << (-Rc_w[i].transpose() * Pc_w[i]).transpose()
@@ -896,6 +902,7 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
         }
         priorPw /= Pc_w.size();
         cout << "CalculatePriorPwByHeight: " << priorPw.transpose() << endl;
+#endif
     } else {
         priorPw = historyEstPw.back();
         Eigen::Matrix3d _cov = historyEstCov.back();
