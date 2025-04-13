@@ -35,3 +35,4 @@ link_libraries(
 add_executable(imu_wheel_calibration imuWheelCalibrate.cpp)
 add_executable(imu_camera_calibration TcbCalibrate.cpp)
 add_executable(optimizaLandmarkPosition optimizaLandmarkPosition.cpp)
+add_executable(larndmark_radius_to_evaluate_depth larndmark_radius_to_evaluate_depth.cpp)
