@@ -11,7 +11,7 @@ constexpr double INF = 1e20;
 constexpr int ceresMaxIterativeTime = 1000;
 
 // 每次量测更新时所需要的最少帧数量，比这个更重要的是基线长度
-constexpr int kMinUpdateFrameNumEachTime = 3;
+constexpr int kMinUpdateFrameNumEachTime = 10;
 // 姿态、观测条件都一样的情况下，最影响地图点位置不确定度的只有基线
 // 其次就是量测的个数了，如果基线长短不断变换，那么标准差自然来回波动，
 // 如果累积基线长度不断增大，那么标准差自然不断减小，
@@ -132,6 +132,7 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
                                 const int updateTime, Eigen::Vector3d& optPw,
                                 Eigen::Matrix3d& cov);
 
+
 int main(int argc, char** argv) {
     //constexpr int X0 = 220, Y0 = 200; // 这个可能导致位置差异太大，导致无法收敛？测试显示并不是，那是为啥呢？
     // 原因应该是X、Y值差异过小，但又是为什么要这样呢？它们相对位置都差不多啊？
@@ -231,8 +232,9 @@ int main(int argc, char** argv) {
     constexpr int maxUpdateTime = 10;
     const Eigen::Vector2d rotRange(0.05, 0.1);  // degree
     // TODO: 实验显示，帧间距离越近，不确定度会非常大
-    const Eigen::Vector2d moveRange(0.01, 0.1);  // meter
-    //const Eigen::Vector2d moveRange(5, 10);  // meter
+    //const Eigen::Vector2d moveRange(0.01, 0.1);  // meter
+    // 帧间基线越大，J矩阵值越大(信息越大)，协方差下降越快
+    const Eigen::Vector2d moveRange(0.5, 1.0);  // meter
 
     int updateTime = 0;
     while (updateTime < maxUpdateTime) {
@@ -912,8 +914,13 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
 
         // 利用历史更新基线长度来提升先验权重，以期降低不确定度？？？？
 #if ExpandPriorWeightAccordingToAccumulateBaseline
-        //priorWeight *= accumulateBaseline / lastUpdateAccBaseline * updateTime;
-        priorWeight *= accumulateBaseline / lastUpdateAccBaseline;
+        //const double flatRatio = accumulateBaseline / lastUpdateAccBaseline * updateTime; // 下降过快
+        //const double flatRatio = accumulateBaseline / lastUpdateAccBaseline; // 下降过慢
+
+        // 计算历史更新应有权重
+        // n = SW.size(), N = SW.size()+updateTime, flatratio = N/n = 1+updateTime/SW.size()
+        const double flatRatio = 1.0 + double(updateTime)/slidingWindow.size(); // 下降适中
+        priorWeight *= flatRatio;
 #endif
     }
 
