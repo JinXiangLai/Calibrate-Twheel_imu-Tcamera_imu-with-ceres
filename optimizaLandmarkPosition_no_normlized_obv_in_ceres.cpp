@@ -10,8 +10,6 @@ constexpr double noiseStd2 = noiseStd * noiseStd;
 constexpr double INF = 1e20;
 constexpr int ceresMaxIterativeTime = 1000;
 
-constexpr double kSqrt2 = 1.414213562;  // sqrt(2);
-
 // 每次量测更新时所需要的最少帧数量，比这个更重要的是基线长度
 constexpr int kMinUpdateFrameNumEachTime = 10;
 // 姿态、观测条件都一样的情况下，最影响地图点位置不确定度的只有基线
@@ -46,8 +44,7 @@ class ProjectionResidual : public ceres::CostFunction {
    public:
     ProjectionResidual(const Eigen::Matrix3d& _Rc_w,
                        const Eigen::Vector3d& _Pc_w,
-                       const Eigen::Vector2d& _obv, const Eigen::Matrix3d& _K,
-                       const Eigen::Vector2d& _meanObv);
+                       const Eigen::Vector2d& _obv, const Eigen::Matrix3d& _K);
     virtual bool Evaluate(double const* const* parameters, double* residuals,
                           double** jacobians) const override;
 
@@ -56,10 +53,6 @@ class ProjectionResidual : public ceres::CostFunction {
     Eigen::Vector3d Pc_w_;
     Eigen::Vector2d obv_;
     Eigen::Matrix3d K;
-
-    Eigen::Vector2d meanObv_;
-    Eigen::Vector2d sobv_;
-    double scale_ = 0;
 };
 
 class PriorPwResidual : public ceres::CostFunction {
@@ -101,7 +94,6 @@ class SolveLandmarkPosition {
                           const vector<Eigen::Vector3d>& Pc_w,
                           const vector<vector<Eigen::Vector2d>>& obvs,
                           const Eigen::Matrix3d& _K,
-                          const vector<Eigen::Vector2d>& meanObvs,
                           const Eigen::Vector3d& priorPw = {0., 0., 0.});
     SolveLandmarkPosition() = delete;
     Eigen::Vector3d Optimize();
@@ -119,8 +111,6 @@ class SolveLandmarkPosition {
     Eigen::Vector3d optPw_;
     ceres::Problem problem_;
     Eigen::Matrix3d K_;
-
-    vector<Eigen::Vector2d> meanObvs_;
 };
 
 /**
@@ -652,9 +642,9 @@ Eigen::Vector3d EstimatePwInitialValueNormlized(
 
 SolveLandmarkPosition::SolveLandmarkPosition(
     const vector<Eigen::Matrix3d>& Rc_w, const vector<Eigen::Vector3d>& Pc_w,
-    const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& _K, const vector<Eigen::Vector2d>& meanObvs,
+    const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& _K,
     const Eigen::Vector3d& priorPw)
-    : Rc_w_(Rc_w), Pc_w_(Pc_w), obvs_(obvs), priorPw_(priorPw), K_(_K), meanObvs_(meanObvs) {}
+    : Rc_w_(Rc_w), Pc_w_(Pc_w), obvs_(obvs), priorPw_(priorPw), K_(_K) {}
 
 Eigen::Vector3d SolveLandmarkPosition::Optimize() {
     if (priorPw_.isApprox(Eigen::Vector3d::Zero())) {
@@ -675,7 +665,7 @@ Eigen::Vector3d SolveLandmarkPosition::Optimize() {
                     new ProjectionResidual(Rc_w_[i], Pc_w_[i], obv, K_));
 #else
             ceres::CostFunction* cost_function =
-                new ProjectionResidual(Rc_w_[i], Pc_w_[i], obv, K_, meanObvs_[i]);
+                new ProjectionResidual(Rc_w_[i], Pc_w_[i], obv, K_);
 #endif
             // 2、再指定残差块，这样就不需要再后续指定problem.SetManifold(q,
             // quaternion_parameterization)
@@ -700,7 +690,7 @@ Eigen::Vector3d SolveLandmarkPosition::Optimize() {
     options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT;
     options.logging_type =
         ceres::PER_MINIMIZER_ITERATION;  // 设置输出log便于bug排查
-    options.logging_type = ceres::PER_MINIMIZER_ITERATION; // ceres::SILENT;
+    options.logging_type = ceres::PER_MINIMIZER_ITERATION;  // ceres::SILENT;
     options.function_tolerance = 1e-12;
     options.inner_iteration_tolerance = 1e-6;
 
@@ -765,19 +755,13 @@ bool ProjectionResidual::operator()(const T* const _Pw, T* residual) const {
 ProjectionResidual::ProjectionResidual(const Eigen::Matrix3d& _Rc_w,
                                        const Eigen::Vector3d& _Pc_w,
                                        const Eigen::Vector2d& _obv,
-                                       const Eigen::Matrix3d& _K,
-                                       const Eigen::Vector2d& _meanObv)
-    : Rc_w_(_Rc_w), Pc_w_(_Pc_w), obv_(_obv), K(_K), meanObv_(_meanObv) {
+                                       const Eigen::Matrix3d& _K)
+    : Rc_w_(_Rc_w), Pc_w_(_Pc_w), obv_(_obv), K(_K) {
     // SizedCostFunction同样继承自CostFunction，
     // 若不使用SizedCostFunction，则需要手动设置残差维度和参数块大小
     set_num_residuals(2);
     // 这里
     mutable_parameter_block_sizes()->push_back(3);
-
-    const double d = (_obv - _meanObv).norm();
-    scale_ = kSqrt2 / d;
-    sobv_ = Eigen::Vector2d(scale_ * obv_.x() - scale_ * meanObv_.x(),
-                            scale_ * obv_.y() - scale_ * meanObv_.y());
 }
 
 bool ProjectionResidual::Evaluate(double const* const* parameters,
@@ -791,17 +775,9 @@ bool ProjectionResidual::Evaluate(double const* const* parameters,
     const Eigen::Matrix<double, 3, 1> Pn = Pc / Pc[2];
     const Eigen::Matrix<double, 2, 1> obv = K.block(0, 0, 2, 3) * Pn;
 
-    auto GetScaleObv = [this](const Eigen::Vector2d& obv) -> Eigen::Vector2d {
-        return Eigen::Vector2d(scale_ * obv.x() - scale_ * meanObv_.x(),
-                               scale_ * obv.y() - scale_ * meanObv_.y());
-    };
-    const Eigen::Vector2d sobv = GetScaleObv(obv);
-
     // 计算残差
-    //residuals[0] = obv(0) - obv_(0);
-    //residuals[1] = obv(1) - obv_(1);
-    residuals[0] = sobv.x() - sobv_.x();
-    residuals[1] = sobv.y() - sobv_.y();
+    residuals[0] = obv(0) - obv_(0);
+    residuals[1] = obv(1) - obv_(1);
 
     // 计算雅可比
     if (jacobians) {
@@ -810,16 +786,14 @@ bool ProjectionResidual::Evaluate(double const* const* parameters,
             Eigen::Map<Eigen::Matrix<double, 2, 3, Eigen::RowMajor>> j(
                 jacobians[0]);
             j.setZero();
-            const Eigen::Matrix2d J_r_obv =
-                (Eigen::Matrix2d() << scale_, 0, 0, scale_).finished();
-            const Eigen::Matrix<double, 2, 3> J_obv_Pn = K.block(0, 0, 2, 3);
+            const Eigen::Matrix<double, 2, 3> J_r_Pn = K.block(0, 0, 2, 3);
             const double invZ = 1 / Pc[2];
             const double invZ2 = invZ * invZ;
             const Eigen::Matrix3d J_Pn_Pc =
                 (Eigen::Matrix3d() << invZ, 0, -Pc[0] * invZ2, 0, invZ,
                  -Pc[1] * invZ2, 0, 0, 0)
                     .finished();
-            j = J_r_obv * J_obv_Pn * J_Pn_Pc * Rc_w_;
+            j = J_r_Pn * J_Pn_Pc * Rc_w_;
         }
     }
 
@@ -975,18 +949,17 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
         Pc_w[i] = frame.Pc_w;
         height2Ground[i] = frame.height2Ground;
         obvs[i] = frame.obv;
-        meanObvs[i] = Eigen::Vector2d::Zero();
+        Eigen::Vector2d meanObv = Eigen::Vector2d::Zero();
         for (int j = 0; j < obvs[i].size(); ++j) {
-            meanObvs[i] += obvs[i][j];
+            meanObv += obvs[i][j];
         }
-        meanObvs[i] /= obvs[i].size();
-        //scales[i].resize(obvs[i].size());
-        //for (int j = 0; j < obvs[i].size(); ++j) {
-        //    const double d = (obvs[i][j] - meanObvs[i]).norm();
-        //    scales[i][j] = sqrt2 / d;
-        //}
+        meanObv /= obvs[i].size();
+        scales[i].resize(obvs[i].size());
+        for (int j = 0; j < obvs[i].size(); ++j) {
+            const double d = (obvs[i][j] - meanObv).norm();
+            scales[i][j] = sqrt2 / d;
+        }
     }
-
     // 利用对地高度计算初值，因为X logo被认为是在地面即d=0，但现在让其为depth=50，
     // 因此我参考系也要往上平移50
     Eigen::Vector3d priorPw = Eigen::Vector3d::Zero();
@@ -1045,7 +1018,7 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
         priorWeight *= flatRatio;
 #endif
     }
-    SolveLandmarkPosition slp(Rc_w, Pc_w, obvs, K, meanObvs);
+    SolveLandmarkPosition slp(Rc_w, Pc_w, obvs, K);
     slp.SetPriorPw(priorPw);
     slp.SetPriorWeight(priorWeight);
 
