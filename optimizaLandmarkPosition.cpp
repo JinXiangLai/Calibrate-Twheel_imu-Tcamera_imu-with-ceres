@@ -84,6 +84,10 @@ Eigen::Vector3d EstimatePwInitialValue(
     const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
     const vector<vector<Eigen::Vector2d>>& obvs, const ::Eigen::Matrix3d& K);
 
+Eigen::Vector3d EstimatePwInitialValueNormlized(
+    const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
+    const vector<vector<Eigen::Vector2d>>& obvs, const ::Eigen::Matrix3d& K);
+
 class SolveLandmarkPosition {
    public:
     SolveLandmarkPosition(const vector<Eigen::Matrix3d>& Rc_w,
@@ -134,7 +138,6 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
                                 const int updateTime, Eigen::Vector3d& optPw,
                                 Eigen::Matrix3d& cov);
 
-
 int main(int argc, char** argv) {
     //constexpr int X0 = 220, Y0 = 200; // 这个可能导致位置差异太大，导致无法收敛？测试显示并不是，那是为啥呢？
     // 原因应该是X、Y值差异过小，但又是为什么要这样呢？它们相对位置都差不多啊？
@@ -149,7 +152,7 @@ int main(int argc, char** argv) {
     // 所以结论：
     // 1. 和半径大小有关
     // 2. 和采样点数量有关
-    // 3. 和运动方式有关
+    // 3. 和运动方式有关,最终影响投影点的位置
     // 4. 和噪声大小有关
     // 5. 最终影响先验估计值
     // 6. SVD求解Ax=0过程中，+X与-X都是解，我们要保证取+X
@@ -578,6 +581,64 @@ Eigen::Vector3d EstimatePwInitialValue(
     return estPw;
 }
 
+Eigen::Vector3d EstimatePwInitialValueNormlized(
+    const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
+    const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& K) {
+    // px2 = ρ2 * K * [Rcw, Pcw] * Pw
+    // [px2]x * px2 = [px2]x * K * [Rcw, Pcw] * Pw = 0
+    // 设归一化放缩矩阵为S，则有：
+    // S * px2 = S * ρ2 * K * [Rcw, Pcw] * Pw
+    // [S * px2]x * S * px2 = [S * px2]x * S * K * [Rcw, Pcw] * Pw = 0
+    Eigen::MatrixXd A;
+    A.resize(3 * Rcw.size() * obvs[0].size(), 4);
+    int rowId = 0;
+    for (int i = 0; i < Rcw.size(); ++i) {
+        // 将所有观测放缩到以(0, 0)为中心，长为sqrt(2)的圆内
+        const double sqrt2 = sqrt(2.0);
+        Eigen::Vector2d meanObv = Eigen::Vector2d::Zero();
+        vector<Eigen::Vector2d> meanObvs;
+        for (int j = 0; j < obvs[i].size(); ++j) {
+            meanObv += obvs[i][j];
+        }
+        meanObv /= obvs[i].size();
+
+        // 遍历当前帧能够观测到的所有地图点
+        const Eigen::Vector3d origin(meanObv[0], meanObv[1], 1);
+        for (int j = 0; j < obvs[i].size(); ++j) {
+            const Eigen::Vector3d obv_i{obvs[i][j](0), obvs[i][j](1), 1.0};
+            // 计算当前观测的放缩系数及放缩矩阵
+            const double scaleFactor = sqrt2 / (obv_i - origin).norm();
+            Eigen::Matrix3d scaleMatrix =
+                (Eigen::Matrix3d() << scaleFactor, 0, -scaleFactor * origin.x(),
+                 0, scaleFactor, -scaleFactor * origin.y(), 0, 0, 1)
+                    .finished();
+            // 放缩观测
+            const Eigen::Vector3d sObv_i = scaleMatrix * obv_i;
+            Eigen::Matrix<double, 3, 4> T;
+            T.block(0, 0, 3, 3) = Rcw[i];
+            T.block(0, 3, 3, 1) = Pcw[i];
+            A.block(rowId, 0, 3, 4) = skew(sObv_i) * scaleMatrix * K * T;
+            rowId += 3;
+        }
+    }
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeFullV);
+    const Eigen::Vector4d bestV =
+        svd.matrixV().col(svd.singularValues().size() - 1);
+    const Eigen::Vector3d estPw = bestV.head(3) / bestV[3];
+    // cout << "A:\n" << A << endl;
+    // 这里有一个0空间，若要有解，则最后一个特征值要极小
+    cout << "singularValues normlized: " << svd.singularValues().transpose() << endl;
+    // cout << "est Pw: " << estPw.transpose() << endl;
+    if (estPw.z() < 0) {
+        // 原因是这里有时候会解算出负值，根据Ax=0，x的正负不影响结果，
+        // 因此需要加一个先验判断
+        // 但是也存在着这里解算不准的情况，因此需要加一个由对地高度直接解算位置的先验
+        return -estPw;
+        ;
+    }
+    return estPw;
+}
+
 SolveLandmarkPosition::SolveLandmarkPosition(
     const vector<Eigen::Matrix3d>& Rc_w, const vector<Eigen::Vector3d>& Pc_w,
     const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& _K,
@@ -902,7 +963,15 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
         }
         priorPw /= Pc_w.size();
         cout << "CalculatePriorPwByHeight: " << priorPw.transpose() << endl;
+#else 
+    // 使用DLT计算初始值
+    const Eigen::Vector3d initPw1 = EstimatePwInitialValue(Rc_w, Pc_w, obvs, K);
+    const Eigen::Vector3d initPw2 = EstimatePwInitialValueNormlized(Rc_w, Pc_w, obvs, K);
+    cout << "initPw1: " << initPw1.transpose() << endl;
+    cout << "initPw2: " << initPw2.transpose() << endl;
+    priorPw = initPw1;
 #endif
+
     } else {
         priorPw = historyEstPw.back();
         Eigen::Matrix3d _cov = historyEstCov.back();
@@ -926,11 +995,11 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
 
         // 计算历史更新应有权重
         // n = SW.size(), N = SW.size()+updateTime, flatratio = N/n = 1+updateTime/SW.size()
-        const double flatRatio = 1.0 + double(updateTime)/slidingWindow.size(); // 下降适中
+        const double flatRatio =
+            1.0 + double(updateTime) / slidingWindow.size();  // 下降适中
         priorWeight *= flatRatio;
 #endif
     }
-
     SolveLandmarkPosition slp(Rc_w, Pc_w, obvs, K);
     slp.SetPriorPw(priorPw);
     slp.SetPriorWeight(priorWeight);
