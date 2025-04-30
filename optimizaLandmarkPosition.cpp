@@ -244,12 +244,12 @@ int main(int argc, char** argv) {
     deque<vector<Eigen::Vector2d>> debugObvs;
 
     // 设置运动参数
-    constexpr int maxUpdateTime = 10;
+    constexpr int maxUpdateTime = 100;
     const Eigen::Vector2d rotRange(0.05, 0.1);  // degree
     // TODO: 实验显示，帧间距离越近，不确定度会非常大
     //const Eigen::Vector2d moveRange(0.01, 0.1);  // meter
     // 帧间基线越大，J矩阵值越大(信息越大)，协方差下降越快
-    const Eigen::Vector2d moveRange(0.5, 1.0);  // meter
+    const Eigen::Vector2d moveRange(0.1, 1.0);  // meter
 
     int updateTime = 0;
     while (updateTime < maxUpdateTime) {
@@ -263,8 +263,8 @@ int main(int argc, char** argv) {
         const double moveDist = md(gen2);
         // 生成旋转及平移方向
         Eigen::Vector3d rotDir(0, 0, 1);  // 主要绕Z轴，不然就翻车了
-        Eigen::Vector3d posDir(md(gen2), md(gen2),
-                               md(gen2));  // 沿任何轴平移均可
+        Eigen::Vector3d posDir(md(gen2)*0.1, md(gen2)*0.2,
+                               md(gen2)*10);  // 沿任何轴平移均可
 
         // 产生下一个位姿
         Eigen::Matrix3d Rw_c2;
@@ -353,12 +353,45 @@ int main(int argc, char** argv) {
         lastUpdateAccBaseline = accumulateBaseline;
         ++updateTime;
 
+        // 这种方法的话，一般是最中间的帧最吃亏
+        auto CalculateMinAccBaseline =
+            [&slidingWindow](const int id) -> double {
+            double sumBs = 0.;
+            for (int i = 0; i < slidingWindow.size(); ++i) {
+                if (i != id) {
+                    sumBs += (slidingWindow[i].GetPw() - slidingWindow[id].GetPw()).head(2).norm();
+                }
+            }
+            return sumBs;
+        };
+
         // 移除滑动窗口元素
         auto MoveSlidingWindow = [&slidingWindow, &debugImgs,
-                                  &debugObvs]() -> void {
-            slidingWindow.pop_front();
-            debugImgs.pop_front();
-            debugObvs.pop_front();
+                                  &debugObvs, &CalculateMinAccBaseline]() -> void {
+            // 移除与最新帧水平基线最短的帧
+            const DataFrame& last = slidingWindow.back();
+            int minDistId = -1;
+            double minHorizontalBaseline = 1e10;
+            // 移动前面的任意一帧
+            for (int i = 0; i < slidingWindow.size() -2; ++i) {
+                //const DataFrame& cur = slidingWindow[i];
+                //const double bs = (cur.GetPw() - last.GetPw()).head(2).norm();
+                double bs = CalculateMinAccBaseline(i);
+                printf("id=%d, bs=%f\n", i, bs);
+                if (bs < minHorizontalBaseline) {
+                    minHorizontalBaseline = bs;
+                    minDistId = i;
+                }
+                
+            }
+            printf("midId=%d, minDist=%f\n", minDistId, minHorizontalBaseline);
+
+            slidingWindow.erase(slidingWindow.begin() + minDistId);
+            debugImgs.erase(debugImgs.begin() + minDistId);
+            debugObvs.erase(debugObvs.begin() + minDistId);
+            //slidingWindow.pop_front();
+            //debugImgs.pop_front();
+            //debugObvs.pop_front();
         };
         //while (slidingWindow.size() >= kMinUpdateFrameNumEachTime) {
         //    MoveSlidingWindow();
@@ -652,9 +685,14 @@ Eigen::Vector3d EstimatePwInitialValueNormlized(
 
 SolveLandmarkPosition::SolveLandmarkPosition(
     const vector<Eigen::Matrix3d>& Rc_w, const vector<Eigen::Vector3d>& Pc_w,
-    const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& _K, const vector<Eigen::Vector2d>& meanObvs,
-    const Eigen::Vector3d& priorPw)
-    : Rc_w_(Rc_w), Pc_w_(Pc_w), obvs_(obvs), priorPw_(priorPw), K_(_K), meanObvs_(meanObvs) {}
+    const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& _K,
+    const vector<Eigen::Vector2d>& meanObvs, const Eigen::Vector3d& priorPw)
+    : Rc_w_(Rc_w),
+      Pc_w_(Pc_w),
+      obvs_(obvs),
+      priorPw_(priorPw),
+      K_(_K),
+      meanObvs_(meanObvs) {}
 
 Eigen::Vector3d SolveLandmarkPosition::Optimize() {
     if (priorPw_.isApprox(Eigen::Vector3d::Zero())) {
@@ -674,8 +712,8 @@ Eigen::Vector3d SolveLandmarkPosition::Optimize() {
                 new ceres::AutoDiffCostFunction<ProjectionResidual, 2, 3>(
                     new ProjectionResidual(Rc_w_[i], Pc_w_[i], obv, K_));
 #else
-            ceres::CostFunction* cost_function =
-                new ProjectionResidual(Rc_w_[i], Pc_w_[i], obv, K_, meanObvs_[i]);
+            ceres::CostFunction* cost_function = new ProjectionResidual(
+                Rc_w_[i], Pc_w_[i], obv, K_, meanObvs_[i]);
 #endif
             // 2、再指定残差块，这样就不需要再后续指定problem.SetManifold(q,
             // quaternion_parameterization)
@@ -700,7 +738,7 @@ Eigen::Vector3d SolveLandmarkPosition::Optimize() {
     options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT;
     options.logging_type =
         ceres::PER_MINIMIZER_ITERATION;  // 设置输出log便于bug排查
-    options.logging_type = ceres::PER_MINIMIZER_ITERATION; // ceres::SILENT;
+    options.logging_type = ceres::PER_MINIMIZER_ITERATION;  // ceres::SILENT;
     options.function_tolerance = 1e-12;
     options.inner_iteration_tolerance = 1e-6;
 

@@ -26,14 +26,17 @@ const Eigen::Matrix3d K = (Eigen::Matrix3d() << 400.0, 0.0, 320.0,
                                                 0.0, 320.0, 240.0,
                                                 0.0, 0.0, 1.0).finished();
 const Eigen::Matrix3d invK = K.inverse();
-// clang-format on
 
 template <typename T>
 Eigen::Matrix<T, 3, 3> skew(const Eigen::Matrix<T, 3, 1>& v) {
     Eigen::Matrix<T, 3, 3> m;
-    m << T(0), -v(2), v(1), v(2), T(0), -v(0), -v(1), v(0), T(0);
+    m << T(0), -v(2), v(1), 
+         v(2), T(0), -v(0), 
+         -v(1), v(0), T(0);
     return m;
 }
+// clang-format on
+
 
 inline void GenerateNextPose(const Eigen::Matrix3d& Rw_c1,
                              const Eigen::Vector3d& Pw_c1,
@@ -61,6 +64,9 @@ struct DataFrame {
           timestamp(_t) {
         return;
     }
+
+    Eigen::Vector3d GetPw() const {return -Rc_w.transpose() * Pc_w;}
+
     double timestamp = 0.;
     Eigen::Matrix3d Rc_w = Eigen::Matrix3d::Identity();
     Eigen::Vector3d Pc_w = Eigen::Vector3d::Zero();
