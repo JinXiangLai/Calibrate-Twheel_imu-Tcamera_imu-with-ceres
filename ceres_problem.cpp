@@ -188,6 +188,7 @@ Eigen::Vector3d EstimatePwInitialValueOnNormPlane(
 
     Eigen::MatrixXd A34, A33;
     A34.resize(equationNum, 4);
+    // QR分解方法因未使用齐次坐标，则默认假设Z=1，这种解法是不对的
     A33.resize(equationNum, 3);
     Eigen::VectorXd b;
     b.resize(equationNum, 1);
@@ -231,7 +232,7 @@ Eigen::Vector3d EstimatePwInitialValueOnNormPlane(
     //const Eigen::Vector3d& estPw = A33.colPivHouseholderQr().solve(b);
     const Eigen::Vector3d& estPw = A33.fullPivHouseholderQr().solve(b);
 
-    cout << "tar estPw: " << estPw.transpose() << endl;
+    cout << "QR estPw 不含尺度: " << estPw.transpose() << endl;
 
     return estNormPw;
     //return estPw;
