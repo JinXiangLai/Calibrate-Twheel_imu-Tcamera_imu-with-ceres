@@ -1,8 +1,6 @@
-#include "common.hpp"
+#include "ceres_problem.h"
 
 using namespace std;
-
-#define USE_AUTO_DIFF 0
 
 constexpr double huberTH = 5.99;
 constexpr double noiseStd = 3.0;
@@ -10,7 +8,6 @@ constexpr double noiseStd2 = noiseStd * noiseStd;
 constexpr double INF = 1e20;
 constexpr int ceresMaxIterativeTime = 1000;
 
-constexpr double kSqrt2 = 1.414213562;  // sqrt(2);
 
 // 每次量测更新时所需要的最少帧数量，比这个更重要的是基线长度
 constexpr int kMinUpdateFrameNumEachTime = 10;
@@ -23,77 +20,12 @@ constexpr double kMinUpdateBaselineInSW = 6.5;
 // 才能使std不断下降，这是因为W增大，海森矩阵H增大，而最终的方差与H矩阵的逆正相关
 #define ExpandPriorWeightAccordingToAccumulateBaseline 1
 
-#if USE_AUTO_DIFF
-// 定义误差函数，自动求导条件下，不需定义Evaluate函数，但必须提供operator()函数以计算残差
-struct ProjectionResidual {
-    ProjectionResidual(const Eigen::Matrix3d& _Rc_w,
-                       const Eigen::Vector3d& _Pc_w,
-                       const Eigen::Vector2d& _obv, const Eigen::Matrix3d& _K);
-
-    // 使用自动求导时才必须提供该函数
-    template <typename T>
-    bool operator()(const T* const _Pw, T* residual) const;
-
-   private:
-    Eigen::Matrix3d Rc_w_;
-    Eigen::Vector3d Pc_w_;
-    Eigen::Vector2d obv_;
-    Eigen::Matrix3d K;
-};
-#else
-
-class ProjectionResidual : public ceres::CostFunction {
-   public:
-    ProjectionResidual(const Eigen::Matrix3d& _Rc_w,
-                       const Eigen::Vector3d& _Pc_w,
-                       const Eigen::Vector2d& _obv, const Eigen::Matrix3d& _K,
-                       const Eigen::Vector2d& _meanObv);
-    virtual bool Evaluate(double const* const* parameters, double* residuals,
-                          double** jacobians) const override;
-
-   private:
-    Eigen::Matrix3d Rc_w_;
-    Eigen::Vector3d Pc_w_;
-    Eigen::Vector2d obv_;
-    Eigen::Matrix3d K;
-
-    Eigen::Vector2d meanObv_;
-    Eigen::Vector2d sobv_;
-    double scale_ = 0;
-};
-
-class PriorPwResidual : public ceres::CostFunction {
-   public:
-    PriorPwResidual(const Eigen::Vector3d& p, const Eigen::Matrix3d& w)
-        : priorPw_(p), weight_(w) {
-        set_num_residuals(3);
-        mutable_parameter_block_sizes()->push_back(3);
-    }
-    virtual bool Evaluate(double const* const* parameters, double* residuals,
-                          double** jacobians) const override;
-
-   private:
-    Eigen::Vector3d priorPw_;
-    Eigen::Matrix3d weight_;
-};
-#endif
-
 Eigen::Matrix3d RPY2Rotation(const Eigen::Vector3d& _rpy,
                              const bool isDeg = true);
 
 Eigen::Vector2d ProjectPw2Pixel(const Eigen::Vector3d& Pw,
                                 const Eigen::Matrix3d& Rcw,
                                 const Eigen::Vector3d& Pcw);
-
-// 实际实验发现，只要方向对就行，尽管初值很不准，但在所估计的初值方向附近
-// 只有最优值这么一个极小值，去验证吧！
-Eigen::Vector3d EstimatePwInitialValue(
-    const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
-    const vector<vector<Eigen::Vector2d>>& obvs, const ::Eigen::Matrix3d& K);
-
-Eigen::Vector3d EstimatePwInitialValueNormlized(
-    const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
-    const vector<vector<Eigen::Vector2d>>& obvs, const ::Eigen::Matrix3d& K);
 
 class SolveLandmarkPosition {
    public:
@@ -263,8 +195,8 @@ int main(int argc, char** argv) {
         const double moveDist = md(gen2);
         // 生成旋转及平移方向
         Eigen::Vector3d rotDir(0, 0, 1);  // 主要绕Z轴，不然就翻车了
-        Eigen::Vector3d posDir(md(gen2)*0.1, md(gen2)*0.2,
-                               md(gen2)*10);  // 沿任何轴平移均可
+        Eigen::Vector3d posDir(md(gen2) * 0.1, md(gen2) * 0.2,
+                               md(gen2) * 10);  // 沿任何轴平移均可
 
         // 产生下一个位姿
         Eigen::Matrix3d Rw_c2;
@@ -359,21 +291,24 @@ int main(int argc, char** argv) {
             double sumBs = 0.;
             for (int i = 0; i < slidingWindow.size(); ++i) {
                 if (i != id) {
-                    sumBs += (slidingWindow[i].GetPw() - slidingWindow[id].GetPw()).head(2).norm();
+                    sumBs +=
+                        (slidingWindow[i].GetPw() - slidingWindow[id].GetPw())
+                            .head(2)
+                            .norm();
                 }
             }
             return sumBs;
         };
 
         // 移除滑动窗口元素
-        auto MoveSlidingWindow = [&slidingWindow, &debugImgs,
-                                  &debugObvs, &CalculateMinAccBaseline]() -> void {
+        auto MoveSlidingWindow = [&slidingWindow, &debugImgs, &debugObvs,
+                                  &CalculateMinAccBaseline]() -> void {
             // 移除与最新帧水平基线最短的帧
             const DataFrame& last = slidingWindow.back();
             int minDistId = -1;
             double minHorizontalBaseline = 1e10;
             // 移动前面的任意一帧
-            for (int i = 0; i < slidingWindow.size() -2; ++i) {
+            for (int i = 0; i < slidingWindow.size() - 2; ++i) {
                 //const DataFrame& cur = slidingWindow[i];
                 //const double bs = (cur.GetPw() - last.GetPw()).head(2).norm();
                 double bs = CalculateMinAccBaseline(i);
@@ -382,7 +317,6 @@ int main(int argc, char** argv) {
                     minHorizontalBaseline = bs;
                     minDistId = i;
                 }
-                
             }
             printf("midId=%d, minDist=%f\n", minDistId, minHorizontalBaseline);
 
@@ -587,102 +521,6 @@ Eigen::Vector2d ProjectPw2Pixel(const Eigen::Vector3d& Pw,
     return obv;
 }
 
-Eigen::Vector3d EstimatePwInitialValue(
-    const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
-    const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& K) {
-    // px2 = ρ2 * K * [Rcw, Pcw] * Pw
-    // [px2]x * px2 = [px2]x * K * [Rcw, Pcw] * Pw = 0
-    Eigen::MatrixXd A;
-    A.resize(3 * Rcw.size() * obvs[0].size(), 4);
-    int rowId = 0;
-    for (int i = 0; i < Rcw.size(); ++i) {
-        // 遍历当前帧能够观测到的所有地图点
-        for (int j = 0; j < obvs[i].size(); ++j) {
-            const Eigen::Vector3d obv_i{obvs[i][j](0), obvs[i][j](1), 1.0};
-            Eigen::Matrix<double, 3, 4> T;
-            T.block(0, 0, 3, 3) = Rcw[i];
-            T.block(0, 3, 3, 1) = Pcw[i];
-            A.block(rowId, 0, 3, 4) = skew(obv_i) * K * T;
-            rowId += 3;
-        }
-    }
-    Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeFullV);
-    const Eigen::Vector4d bestV =
-        svd.matrixV().col(svd.singularValues().size() - 1);
-    const Eigen::Vector3d estPw = bestV.head(3) / bestV[3];
-    // cout << "A:\n" << A << endl;
-    // 这里有一个0空间，若要有解，则最后一个特征值要极小
-    cout << "singularValues: " << svd.singularValues().transpose() << endl;
-    // cout << "est Pw: " << estPw.transpose() << endl;
-    if (estPw.z() < 0) {
-        // 原因是这里有时候会解算出负值，根据Ax=0，x的正负不影响结果，
-        // 因此需要加一个先验判断
-        // 但是也存在着这里解算不准的情况，因此需要加一个由对地高度直接解算位置的先验
-        return -estPw;
-        ;
-    }
-    return estPw;
-}
-
-Eigen::Vector3d EstimatePwInitialValueNormlized(
-    const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
-    const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& K) {
-    // px2 = ρ2 * K * [Rcw, Pcw] * Pw
-    // [px2]x * px2 = [px2]x * K * [Rcw, Pcw] * Pw = 0
-    // 设归一化放缩矩阵为S，则有：
-    // S * px2 = S * ρ2 * K * [Rcw, Pcw] * Pw
-    // [S * px2]x * S * px2 = [S * px2]x * S * K * [Rcw, Pcw] * Pw = 0
-    Eigen::MatrixXd A;
-    A.resize(3 * Rcw.size() * obvs[0].size(), 4);
-    int rowId = 0;
-    for (int i = 0; i < Rcw.size(); ++i) {
-        // 将所有观测放缩到以(0, 0)为中心，长为sqrt(2)的圆内
-        const double sqrt2 = sqrt(2.0);
-        Eigen::Vector2d meanObv = Eigen::Vector2d::Zero();
-        vector<Eigen::Vector2d> meanObvs;
-        for (int j = 0; j < obvs[i].size(); ++j) {
-            meanObv += obvs[i][j];
-        }
-        meanObv /= obvs[i].size();
-
-        // 遍历当前帧能够观测到的所有地图点
-        const Eigen::Vector3d origin(meanObv[0], meanObv[1], 1);
-        for (int j = 0; j < obvs[i].size(); ++j) {
-            const Eigen::Vector3d obv_i{obvs[i][j](0), obvs[i][j](1), 1.0};
-            // 计算当前观测的放缩系数及放缩矩阵
-            const double scaleFactor = sqrt2 / (obv_i - origin).norm();
-            Eigen::Matrix3d scaleMatrix =
-                (Eigen::Matrix3d() << scaleFactor, 0, -scaleFactor * origin.x(),
-                 0, scaleFactor, -scaleFactor * origin.y(), 0, 0, 1)
-                    .finished();
-            // 放缩观测
-            const Eigen::Vector3d sObv_i = scaleMatrix * obv_i;
-            Eigen::Matrix<double, 3, 4> T;
-            T.block(0, 0, 3, 3) = Rcw[i];
-            T.block(0, 3, 3, 1) = Pcw[i];
-            A.block(rowId, 0, 3, 4) = skew(sObv_i) * scaleMatrix * K * T;
-            rowId += 3;
-        }
-    }
-    Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeFullV);
-    const Eigen::Vector4d bestV =
-        svd.matrixV().col(svd.singularValues().size() - 1);
-    const Eigen::Vector3d estPw = bestV.head(3) / bestV[3];
-    // cout << "A:\n" << A << endl;
-    // 这里有一个0空间，若要有解，则最后一个特征值要极小
-    cout << "singularValues normlized: " << svd.singularValues().transpose()
-         << endl;
-    // cout << "est Pw: " << estPw.transpose() << endl;
-    if (estPw.z() < 0) {
-        // 原因是这里有时候会解算出负值，根据Ax=0，x的正负不影响结果，
-        // 因此需要加一个先验判断
-        // 但是也存在着这里解算不准的情况，因此需要加一个由对地高度直接解算位置的先验
-        return -estPw;
-        ;
-    }
-    return estPw;
-}
-
 SolveLandmarkPosition::SolveLandmarkPosition(
     const vector<Eigen::Matrix3d>& Rc_w, const vector<Eigen::Vector3d>& Pc_w,
     const vector<vector<Eigen::Vector2d>>& obvs, const Eigen::Matrix3d& _K,
@@ -707,14 +545,10 @@ Eigen::Vector3d SolveLandmarkPosition::Optimize() {
     for (int i = 0; i < Pc_w_.size(); ++i) {
         for (size_t j = 0; j < obvs_[i].size(); ++j) {
             const Eigen::Vector2d& obv = obvs_[i][j];
-#if USE_AUTO_DIFF
-            ceres::CostFunction* cost_function =
-                new ceres::AutoDiffCostFunction<ProjectionResidual, 2, 3>(
-                    new ProjectionResidual(Rc_w_[i], Pc_w_[i], obv, K_));
-#else
-            ceres::CostFunction* cost_function = new ProjectionResidual(
+
+            ceres::CostFunction* cost_function = new ScaledProjectionResidual(
                 Rc_w_[i], Pc_w_[i], obv, K_, meanObvs_[i]);
-#endif
+
             // 2、再指定残差块，这样就不需要再后续指定problem.SetManifold(q,
             // quaternion_parameterization)
             // 距离越远，容忍的像素误差越小
@@ -776,94 +610,6 @@ Eigen::Matrix3d SolveLandmarkPosition::EstimateCovariance() {
     return noiseStd2 * covMatrix;
 }
 
-#if USE_AUTO_DIFF
-ProjectionResidual::ProjectionResidual(const Eigen::Matrix3d& _Rc_w,
-                                       const Eigen::Vector3d& _Pc_w,
-                                       const Eigen::Vector2d& _obv,
-                                       const Eigen::Matrix3d& _K)
-    : Rc_w_(_Rc_w), Pc_w_(_Pc_w), obv_(_obv), K(_K) {}
-
-template <typename T>
-bool ProjectionResidual::operator()(const T* const _Pw, T* residual) const {
-    const Eigen::Matrix<T, 3, 3> Rcw = Rc_w_.cast<T>();
-    const Eigen::Matrix<T, 3, 1> Pcw = Pc_w_.cast<T>();
-    const Eigen::Matrix<T, 3, 1> Pw(_Pw[0], _Pw[1], _Pw[2]);
-
-    // 重投影
-    const Eigen::Matrix<T, 3, 1> Pc = Rcw * Pw + Pcw;
-    const Eigen::Matrix<T, 3, 1> Pn = Pc / Pc[2];
-    const Eigen::Matrix<T, 2, 1> obv = K.block(0, 0, 2, 3) * Pn;
-
-    // 计算残差
-    residual[0] = obv(0) - obv_(0);
-    residual[1] = obv(1) - obv_(1);
-    return true;
-}
-#else
-ProjectionResidual::ProjectionResidual(const Eigen::Matrix3d& _Rc_w,
-                                       const Eigen::Vector3d& _Pc_w,
-                                       const Eigen::Vector2d& _obv,
-                                       const Eigen::Matrix3d& _K,
-                                       const Eigen::Vector2d& _meanObv)
-    : Rc_w_(_Rc_w), Pc_w_(_Pc_w), obv_(_obv), K(_K), meanObv_(_meanObv) {
-    // SizedCostFunction同样继承自CostFunction，
-    // 若不使用SizedCostFunction，则需要手动设置残差维度和参数块大小
-    set_num_residuals(2);
-    // 这里
-    mutable_parameter_block_sizes()->push_back(3);
-
-    const double d = (_obv - _meanObv).norm();
-    scale_ = kSqrt2 / d;
-    sobv_ = Eigen::Vector2d(scale_ * obv_.x() - scale_ * meanObv_.x(),
-                            scale_ * obv_.y() - scale_ * meanObv_.y());
-}
-
-bool ProjectionResidual::Evaluate(double const* const* parameters,
-                                  double* residuals, double** jacobians) const {
-    // 获取优化参数
-    const double* p = parameters[0];
-    Eigen::Vector3d Pw(p[0], p[1], p[2]);
-
-    // 重投影
-    const Eigen::Matrix<double, 3, 1> Pc = Rc_w_ * Pw + Pc_w_;
-    const Eigen::Matrix<double, 3, 1> Pn = Pc / Pc[2];
-    const Eigen::Matrix<double, 2, 1> obv = K.block(0, 0, 2, 3) * Pn;
-
-    auto GetScaleObv = [this](const Eigen::Vector2d& obv) -> Eigen::Vector2d {
-        return Eigen::Vector2d(scale_ * obv.x() - scale_ * meanObv_.x(),
-                               scale_ * obv.y() - scale_ * meanObv_.y());
-    };
-    const Eigen::Vector2d sobv = GetScaleObv(obv);
-
-    // 计算残差
-    //residuals[0] = obv(0) - obv_(0);
-    //residuals[1] = obv(1) - obv_(1);
-    residuals[0] = sobv.x() - sobv_.x();
-    residuals[1] = sobv.y() - sobv_.y();
-
-    // 计算雅可比
-    if (jacobians) {
-        if (jacobians[0]) {
-            // Evaluate函数中的雅可比是关于环境维度的，所以维度是[3x4]
-            Eigen::Map<Eigen::Matrix<double, 2, 3, Eigen::RowMajor>> j(
-                jacobians[0]);
-            j.setZero();
-            const Eigen::Matrix2d J_r_obv =
-                (Eigen::Matrix2d() << scale_, 0, 0, scale_).finished();
-            const Eigen::Matrix<double, 2, 3> J_obv_Pn = K.block(0, 0, 2, 3);
-            const double invZ = 1 / Pc[2];
-            const double invZ2 = invZ * invZ;
-            const Eigen::Matrix3d J_Pn_Pc =
-                (Eigen::Matrix3d() << invZ, 0, -Pc[0] * invZ2, 0, invZ,
-                 -Pc[1] * invZ2, 0, 0, 0)
-                    .finished();
-            j = J_r_obv * J_obv_Pn * J_Pn_Pc * Rc_w_;
-        }
-    }
-
-    return true;
-}
-#endif
 
 cv::Mat stitchAndDrawMatches(
     const std::deque<cv::Mat>& debugImgs,
@@ -967,28 +713,6 @@ Eigen::Vector3d CalculatePriorPwByHeight(const Eigen::Matrix3d& Rwc,
     }
 
     return sumPw / obvs.size();
-}
-
-bool PriorPwResidual::Evaluate(double const* const* parameters,
-                               double* residuals, double** jacobians) const {
-    const double* p = parameters[0];
-    const Eigen::Vector3d optPw(p[0], p[1], p[2]);
-
-    // 计算残差
-    const Eigen::Vector3d res = weight_ * (optPw - priorPw_);
-    residuals[0] = res[0];
-    residuals[1] = res[1];
-    residuals[2] = res[2];
-
-    if (jacobians) {
-        if (jacobians[0]) {
-            Eigen::Map<Eigen::Matrix<double, 3, 3, Eigen::RowMajor>> j(
-                jacobians[0]);
-            j = weight_;
-        }
-    }
-
-    return true;
 }
 
 bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,

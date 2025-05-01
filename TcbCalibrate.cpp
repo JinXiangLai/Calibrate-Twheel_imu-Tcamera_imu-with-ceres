@@ -1,4 +1,4 @@
-#include "common.hpp"
+#include "ceres_problem.h"
 
 
 using namespace std;
@@ -88,8 +88,8 @@ class Pose {
 
 #if USE_AUTO_DIFF
 // 定义误差函数，自动求导条件下，不需定义Evaluate函数，但必须提供operator()函数以计算残差
-struct RotationResidual {
-    RotationResidual(const Pose &Tb1b2, const Pose &Tc1c2)
+struct RelativePoseResidual {
+    RelativePoseResidual(const Pose &Tb1b2, const Pose &Tc1c2)
         : Tb1b2_(Tb1b2), Tc1c2_(Tc1c2) {}
 
     // 使用自动求导时才必须提供该函数
@@ -166,9 +166,9 @@ struct RotationResidual {
 #else
 
 // 第2个参数对应Manifold的环境维度还是切空间维度呢？
-class RotationResidual : public ceres::CostFunction {
+class RelativePoseResidual : public ceres::CostFunction {
    public:
-    RotationResidual(const Pose &Tb1b2, const Pose &Tc1c2)
+    RelativePoseResidual(const Pose &Tb1b2, const Pose &Tc1c2)
         : Tb1b2_(Tb1b2), Tc1c2_(Tc1c2) {
         // SizedCostFunction同样继承自CostFunction，
         // 若不使用SizedCostFunction，则需要手动设置残差维度和参数块大小
@@ -278,88 +278,6 @@ class RotationResidual : public ceres::CostFunction {
 };
 #endif
 
-// 自定义四元数的 LocalParameterization
-class QuaternionParameterization : public ceres::Manifold {
-   public:
-    bool Plus(const double *x, const double *delta,
-              double *x_plus_delta) const override {
-        // 将 delta 转换为四元数
-        Eigen::Matrix<double, 3, 1> delta_q_vec(delta[0], delta[1], delta[2]);
-        double theta = delta_q_vec.norm();
-        Eigen::Quaterniond delta_q;
-        if (theta > 0.0) {
-            delta_q = Eigen::Quaterniond(
-                Eigen::AngleAxisd(theta, delta_q_vec / theta));
-        } else {
-            delta_q = Eigen::Quaterniond(1.0, 0.0, 0.0, 0.0);
-        }
-
-        // 将 x 转换为四元数
-        Eigen::Quaterniond x_q(x[0], x[1], x[2], x[3]);
-
-        // 更新四元数
-        Eigen::Quaterniond x_plus_delta_q = x_q * delta_q;
-        x_plus_delta_q.normalize();
-
-        // 将结果写回
-        x_plus_delta[0] = x_plus_delta_q.w();
-        x_plus_delta[1] = x_plus_delta_q.x();
-        x_plus_delta[2] = x_plus_delta_q.y();
-        x_plus_delta[3] = x_plus_delta_q.z();
-
-        return true;
-    }
-
-    virtual bool ComputeJacobian(const double *x, double *jacobian) const {
-        return false;
-    }
-
-    virtual bool RightMultiplyByPlusJacobian(
-        const double *x, const int num_rows, const double *ambient_matrix,
-        double *tangent_matrix) const override {
-        return false;
-    }
-
-    virtual bool Minus(const double *x, const double *y,
-                       double *y_minus_x) const override {
-        return false;
-    }
-
-    virtual bool PlusJacobian(const double *x,
-                              double *jacobian) const override {
-        // 计算的是Plus函数对delta增量的雅可比矩阵
-        Eigen::Map<Eigen::Matrix<double, 4, 3, Eigen::RowMajor>> j(jacobian);
-        j.setZero();
-
-#if USE_AUTO_DIFF
-        // j(1, 0) = 1.0;
-        // j(2, 1) = 1.0;
-        // j(3, 2) = 1.0;
-        // 以下参考deepseek的推导，使用下面的公式，收敛明显加快，
-        // 相同条件下，下面的雅可比只需迭代5次，
-        // 上面的雅可比需要迭代48次
-        // clang-format off
-        j << -0.5 * x[1], -0.5 * x[2], -0.5 * x[3], 0.5 * x[0], 
-            -0.5 * x[3], 0.5 * x[2], 0.5 * x[3], 0.5 * x[0], 
-            -0.5 * x[1], -0.5 * x[2], 0.5 * x[1], 0.5 * x[0];
-        // clang-format on
-#else
-        // 因为我在Evaluate函数中已经直接给出∂e/∂δ，所以这里只需要保证乘上∂e/∂δ值不变即可
-        // 但此时只能使用ceres::LINE_SEARCH，而不能使用ceres::TRUST_REGION
-        j.block(0, 0, 3, 3).setIdentity();
-#endif
-        return true;
-    }
-
-    virtual bool MinusJacobian(const double *x,
-                               double *jacobian) const override {
-        return false;
-    }
-
-    int AmbientSize() const override { return 4; }  // 四元数的环境维度
-    int TangentSize() const override { return 3; }  // 四元数的切空间维度
-};
-
 int main() {
     vector<Eigen::Vector3d> rpy{{10, 20, 30}, {5, 9, 11}, {-60, 30, 0}};
     vector<Eigen::Vector3d> pos{{1, 2, 3}, {0, 4, 5}, {10, 10, 10}};
@@ -412,14 +330,14 @@ int main() {
     for (size_t i = 0; i < Tb1b2.size(); ++i) {
 #if USE_AUTO_DIFF
         ceres::CostFunction *cost_function =
-            new ceres::AutoDiffCostFunction<RotationResidual, (ROT_RES_DIM + 3),
+            new ceres::AutoDiffCostFunction<RelativePoseResidual, (ROT_RES_DIM + 3),
                                             4, 3>(
-                new RotationResidual(Tb1b2[i], Tc1c2[i]));
+                new RelativePoseResidual(Tb1b2[i], Tc1c2[i]));
         problem.AddResidualBlock(cost_function, nullptr, q,
                                  estTcb.p_wb_.data());
 #else
         ceres::CostFunction *cost_function =
-            new RotationResidual(Tb1b2[i], Tc1c2[i]);
+            new RelativePoseResidual(Tb1b2[i], Tc1c2[i]);
         problem.AddResidualBlock(cost_function, nullptr, parameters);
 #endif
         // 2、再指定残差块，这样就不需要再后续指定problem.SetManifold(q,

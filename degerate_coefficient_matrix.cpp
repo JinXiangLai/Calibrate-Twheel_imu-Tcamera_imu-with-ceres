@@ -29,4 +29,10 @@ int main() {
     cout << "A0 singular value: " << svd1.singularValues().transpose() << endl;
     cout << "condition number 1: " << svd1.singularValues()[0]/svd1.singularValues()[1] << endl;
     cout << "res1: " << res1.transpose() << endl;
+
+    const Eigen::Vector3d a(1, 2, 3), b(4, 5, 6);
+    const Eigen::Vector3d cr0 = a.cross(b);
+    const Eigen::Vector3d cr1 = CrossProduct(a, b);
+    cout << "cr0: " << cr0.transpose() << endl;;
+    cout << "cr1: " << cr1.transpose() << endl;
 }

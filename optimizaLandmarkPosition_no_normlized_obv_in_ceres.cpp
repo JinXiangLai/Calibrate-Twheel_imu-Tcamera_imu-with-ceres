@@ -540,28 +540,6 @@ Eigen::Vector3d CalculatePriorPwByHeight(const Eigen::Matrix3d& Rwc,
     return sumPw / obvs.size();
 }
 
-bool PriorPwResidual::Evaluate(double const* const* parameters,
-                               double* residuals, double** jacobians) const {
-    const double* p = parameters[0];
-    const Eigen::Vector3d optPw(p[0], p[1], p[2]);
-
-    // 计算残差
-    const Eigen::Vector3d res = weight_ * (optPw - priorPw_);
-    residuals[0] = res[0];
-    residuals[1] = res[1];
-    residuals[2] = res[2];
-
-    if (jacobians) {
-        if (jacobians[0]) {
-            Eigen::Map<Eigen::Matrix<double, 3, 3, Eigen::RowMajor>> j(
-                jacobians[0]);
-            j = weight_;
-        }
-    }
-
-    return true;
-}
-
 bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
                                 const vector<Eigen::Vector3d>& historyEstPw,
                                 const vector<Eigen::Matrix3d>& historyEstCov,

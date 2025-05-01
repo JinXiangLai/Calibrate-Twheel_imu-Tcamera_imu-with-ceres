@@ -19,6 +19,8 @@ constexpr double kRad2Deg = 180 / M_PI;
 constexpr double kDeg2Rad = M_PI / 180;
 constexpr int kImgWidth = 640;
 constexpr int kImgHeight = 480;
+constexpr double kSqrt2 = 1.414213562;  // sqrt(2);
+
 
 // 行优先存入
 // clang-format off
@@ -34,6 +36,14 @@ Eigen::Matrix<T, 3, 3> skew(const Eigen::Matrix<T, 3, 1>& v) {
          v(2), T(0), -v(0), 
          -v(1), v(0), T(0);
     return m;
+}
+
+inline Eigen::Vector3d CrossProduct(const Eigen::Vector3d& a, const Eigen::Vector3d& b) {
+    return Eigen::Vector3d{
+        a[1]*b[2] - a[2]*b[1],
+        a[2]*b[0] - a[0]*b[2],
+        a[0]*b[1] - a[1]*b[0]
+    };
 }
 // clang-format on
 
