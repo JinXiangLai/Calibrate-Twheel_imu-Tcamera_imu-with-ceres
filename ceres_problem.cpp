@@ -246,7 +246,7 @@ Eigen::Vector3d EstimatePwInitialValueNormlized(
 Eigen::Vector3d EstimatePwInitialValueOnNormPlane(
     const vector<Eigen::Matrix3d>& Rcw, const vector<Eigen::Vector3d>& Pcw,
     const vector<vector<Eigen::Vector3d>>& obvsNorm,
-    const ::Eigen::Matrix3d& K) {
+    const ::Eigen::Matrix3d& K, Eigen::Vector4d& singularValues) {
     // s * Pn = [Rw|tw] * Pw
     // [Pn]x * [Rw|tw] * Pw = 0 (1)
     // [Pn]x * Rw * Pw = -[Pn]x * tw (2) // 预设W不可行
@@ -292,9 +292,10 @@ Eigen::Vector3d EstimatePwInitialValueOnNormPlane(
         当无旋转且仅沿Z轴运动时，A_i退化为：
               |0, -1, y,  y*tz|
         A_i = |1, 0, -x, -x*tz|
-            此时，(X, Y)有约束，tz一般取大于0.1m，那么(x, y)在图像的位置是最大的影响因素，
-        我们应该保留越远离图像中心的观测，这样才能提供有效的对Z和W的约束。
-            同样可以发现，当tz越大时，对于W的辨识越明显，意味着越远离图像反而越好估计。
+        (1) (X, Y)有约束，tz一般取大于0.1m，那么(x, y)在图像的位置是最大的影响因素，
+        (2) 我们应该保留越远离图像中心的观测，这样才能提供有效的对Z和W的约束。
+        (3) 同样可以发现，当tz越大时，对于W的辨识越明显，意味着越远离图像反而越好估计。
+        (4) 由于tz会变换，因此，只能靠第3列来筛选，我们最终应该保留下来第3列值较大，且差异较大的观测组
 
         结论：
         (1): 在选择有效的约束时，针对每一个观测提供的两个线性无关方程组，可以查找X、Y、Z、W对应的系数最大值，
@@ -323,7 +324,7 @@ Eigen::Vector3d EstimatePwInitialValueOnNormPlane(
         equationNum += obvs.size() * kUsefulConstraintNum;
     }
 
-    Eigen::MatrixXd A34, A33;
+    Eigen::MatrixXd A33, A34;
     A34.resize(equationNum, 4);
     // QR分解方法因未使用齐次坐标，则默认假设Z=1，这种解法是不对的
     A33.resize(equationNum, 3);
@@ -355,9 +356,10 @@ Eigen::Vector3d EstimatePwInitialValueOnNormPlane(
     cout << "A33:\n" << A33 << endl;
 
     Eigen::JacobiSVD<Eigen::MatrixXd> svd(A34, Eigen::ComputeFullV);
+    singularValues = svd.singularValues();
     const Eigen::Vector4d bestV =
-        svd.matrixV().col(svd.singularValues().size() - 1);
-    cout << "singularValues normlized: " << svd.singularValues().transpose()
+        svd.matrixV().col(singularValues.size() - 1);
+    cout << "singularValues normlized: " << singularValues.transpose()
          << endl;
     Eigen::Vector3d estNormPw = bestV.head(3) / bestV[3];
     cout << "src estNormPw: " << estNormPw.transpose() << endl;

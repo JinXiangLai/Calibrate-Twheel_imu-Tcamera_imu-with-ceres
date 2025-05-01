@@ -169,4 +169,4 @@ Eigen::Vector3d EstimatePwInitialValueOnNormPlane(
     const std::vector<Eigen::Matrix3d>& Rcw,
     const std::vector<Eigen::Vector3d>& Pcw,
     const std::vector<std::vector<Eigen::Vector3d>>& obvsNorm,
-    const ::Eigen::Matrix3d& K);
+    const ::Eigen::Matrix3d& K, Eigen::Vector4d& singularValues);

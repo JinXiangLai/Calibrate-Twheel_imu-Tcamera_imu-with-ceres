@@ -2,11 +2,10 @@
 
 using namespace std;
 
-
 constexpr double huberTH = 5.99;
-constexpr double noiseStd = 3.0;
+constexpr double noiseStd = 0.9;
 constexpr double noiseStd2 = noiseStd * noiseStd;
-constexpr double INF = 1e20;
+constexpr double INF = 1e6;
 constexpr int ceresMaxIterativeTime = 1000;
 
 // 每次量测更新时所需要的最少帧数量，比这个更重要的是基线长度
@@ -26,6 +25,21 @@ Eigen::Matrix3d RPY2Rotation(const Eigen::Vector3d& _rpy,
 Eigen::Vector2d ProjectPw2Pixel(const Eigen::Vector3d& Pw,
                                 const Eigen::Matrix3d& Rcw,
                                 const Eigen::Vector3d& Pcw);
+
+void CalculateInitialPwDLT(const deque<DataFrame>& slidingWindow,
+                           const Eigen::Matrix3d& K, Eigen::Vector3d& initPw,
+                           Eigen::Vector4d& singularValues);
+
+bool CheckInitialPwValidity(const vector<Eigen::Matrix3d>& Rc_w,
+                            const vector<Eigen::Vector3d>& Pc_w,
+                            const Eigen::Vector3d& initPw);
+
+vector<int> GetEraseObservationId(const deque<DataFrame>& slidingWindow);
+
+void ExtrackPoseAndObvFromSlidingWindow(const deque<DataFrame>& slidingWindow,
+                                        vector<Eigen::Matrix3d>& Rc_ws,
+                                        vector<Eigen::Vector3d>& Pc_ws,
+                                        vector<vector<Eigen::Vector2d>>& obvs);
 
 class SolveLandmarkPosition {
    public:
@@ -69,6 +83,7 @@ Eigen::Vector3d CalculatePriorPwByHeight(const Eigen::Matrix3d& Rwc,
                                          const vector<Eigen::Vector2d>& obvs);
 
 bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
+                                const Eigen::Vector3d& priorPw,
                                 const vector<Eigen::Vector3d>& historyEstPw,
                                 const vector<Eigen::Matrix3d>& historyEstCov,
                                 const double& accumulateBaseline,
@@ -132,7 +147,9 @@ int main(int argc, char** argv) {
     //    {-1, -1, 0},
     //    {1, -1, 0},
     //};
-    // directions = {}; // 不使用位置一致性
+    if (noiseStd < 1.0) {
+        directions = {};  // 不使用位置一致性
+    }
     for (Eigen::Vector3d& dir : directions) {
         dir.normalize();
     }
@@ -180,6 +197,8 @@ int main(int argc, char** argv) {
     // 帧间基线越大，J矩阵值越大(信息越大)，协方差下降越快
     const Eigen::Vector2d moveRange(0.05, 0.1);  // meter
 
+    bool isInitialized = false;
+
     int updateTime = 0;
     while (updateTime < maxUpdateTime) {
         //random_device rd; // 不使用真随机数
@@ -211,7 +230,7 @@ int main(int argc, char** argv) {
         }
 
         // 计算投影观测，并产生一帧DataFrame
-        vector<Eigen::Vector2d> obvs;
+        vector<Eigen::Vector2d> obvEachFrame;
         mt19937 gen(44);
         cout << "noiseStd: " << noiseStd << endl;
         normal_distribution<double> dist(0.0, noiseStd);
@@ -232,7 +251,7 @@ int main(int argc, char** argv) {
 
             const Eigen::Vector2d noise{int(dist(gen)), int(dist(gen))};
             const Eigen::Vector2d _obv_noisy = _obv + noise;
-            obvs.push_back(_obv_noisy);
+            obvEachFrame.push_back(_obv_noisy);
 
             //cout << "noise: " << noise.transpose() << endl;
             //cout << "obv: " << _obv.transpose() << endl;
@@ -245,9 +264,9 @@ int main(int argc, char** argv) {
 
         // 位姿添加到滑窗
         DataFrame frame(Rw_c2.transpose(), Rw_c2.transpose() * -Pw_c2, depth,
-                        obvs, double(updateTime));
+                        obvEachFrame, double(updateTime));
         slidingWindow.push_back(frame);
-        debugObvs.push_back(obvs);
+        debugObvs.push_back(obvEachFrame);
         debugImgs.push_back(debugImg);
 
         // 不能使用编号，因为sw窗口大小固定
@@ -270,11 +289,55 @@ int main(int argc, char** argv) {
         cv::waitKey(0);
 
         // 执行一次滑窗优化，并弹出最老一帧
-        Eigen::Vector3d optPw;
-        Eigen::Matrix3d cov;
-        SlidingWindowSolvedByCeres(slidingWindow, historyEstPw, historyEstCov,
-                                   accumulateBaseline, lastUpdateAccBaseline,
-                                   updateTime, optPw, cov);
+        Eigen::Vector3d priorPw, optPw;
+        Eigen::Matrix3d cov = Eigen::Matrix3d::Constant(INF);
+
+        if (!isInitialized) {
+            constexpr double maxConditionNumber = 50;
+            Eigen::Vector4d singularValues{0, 0, 0, 0};
+            CalculateInitialPwDLT(slidingWindow, K, priorPw, singularValues);
+            const double conditionNumber =
+                singularValues[0] / singularValues[2];
+            vector<Eigen::Matrix3d> Rc_ws;
+            vector<Eigen::Vector3d> Pc_ws;
+            vector<vector<Eigen::Vector2d>> obvs;
+            ExtrackPoseAndObvFromSlidingWindow(slidingWindow, Rc_ws, Pc_ws,
+                                               obvs);
+            const bool valid = CheckInitialPwValidity(Rc_ws, Pc_ws, priorPw);
+            if (conditionNumber > maxConditionNumber || !valid) {
+                const vector<int>& mvIds = GetEraseObservationId(slidingWindow);
+                for (const int& id : mvIds) {
+                    slidingWindow[id].timestamp = -1;
+                    // TODO： 这里删除会导致移位
+                    cerr << "will remove the id=" << id << " frame" << endl;
+                    //slidingWindow.erase(slidingWindow.begin() + id);
+                }
+
+                // 这里才能安全删除相关量
+                auto it = slidingWindow.begin();
+                while (it != slidingWindow.end()) {
+                    if (it->timestamp == -1) {
+                        cout << "erase it->t: " << it->timestamp << endl;
+                        it = slidingWindow.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+
+                // TODO: 重置滑窗内相关状态变量
+                continue;
+            }
+        } else {
+            priorPw = historyEstPw.back();
+        }
+
+        const bool success = SlidingWindowSolvedByCeres(
+            slidingWindow, priorPw, historyEstPw, historyEstCov,
+            accumulateBaseline, lastUpdateAccBaseline, updateTime, optPw, cov);
+        if (!success) {
+            cerr << "solve ceres failed!" << endl;
+            continue;
+        }
         historyEstPw.push_back(optPw);
         historyEstCov.push_back(cov);
         printf("accBaseline - lastAcc: %f-%f=%f\nSW size=%ld\n",
@@ -349,8 +412,6 @@ Eigen::Vector2d ProjectPw2Pixel(const Eigen::Vector3d& Pw,
     const Eigen::Vector2d obv = K.block(0, 0, 2, 3) * Pn;
     return obv;
 }
-
-
 
 SolveLandmarkPosition::SolveLandmarkPosition(
     const vector<Eigen::Matrix3d>& Rc_w, const vector<Eigen::Vector3d>& Pc_w,
@@ -435,8 +496,6 @@ Eigen::Matrix3d SolveLandmarkPosition::EstimateCovariance() {
     }
     return noiseStd2 * covMatrix;
 }
-
-
 
 cv::Mat stitchAndDrawMatches(const deque<cv::Mat>& debugImgs,
                              const deque<vector<Eigen::Vector2d>>& obvs) {
@@ -542,81 +601,20 @@ Eigen::Vector3d CalculatePriorPwByHeight(const Eigen::Matrix3d& Rwc,
 }
 
 bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
+                                const Eigen::Vector3d& priorPw,
                                 const vector<Eigen::Vector3d>& historyEstPw,
                                 const vector<Eigen::Matrix3d>& historyEstCov,
                                 const double& accumulateBaseline,
                                 const double& lastUpdateAccBaseline,
                                 const int updateTime, Eigen::Vector3d& optPw,
                                 Eigen::Matrix3d& cov) {
-    // 定义中间变量
-    vector<Eigen::Matrix3d> Rc_w(slidingWindow.size());
-    vector<Eigen::Vector3d> Pc_w(slidingWindow.size());
-    vector<double> height2Ground(slidingWindow.size());
-    vector<vector<Eigen::Vector2d>> obvs(slidingWindow.size());
-    // 保存归一化的观测均值与放缩系数
-    vector<Eigen::Vector2d> meanObvs(slidingWindow.size());
-    vector<vector<double>> scales(slidingWindow.size());
-    const double sqrt2 = sqrt(2);
-    for (int i = 0; i < slidingWindow.size(); ++i) {
-        const DataFrame& frame = slidingWindow[i];
-        Rc_w[i] = frame.Rc_w;
-        Pc_w[i] = frame.Pc_w;
-        height2Ground[i] = frame.height2Ground;
-        obvs[i] = frame.obv;
-        Eigen::Vector2d meanObv = Eigen::Vector2d::Zero();
-        for (int j = 0; j < obvs[i].size(); ++j) {
-            meanObv += obvs[i][j];
-        }
-        meanObv /= obvs[i].size();
-        scales[i].resize(obvs[i].size());
-        for (int j = 0; j < obvs[i].size(); ++j) {
-            const double d = (obvs[i][j] - meanObv).norm();
-            scales[i][j] = sqrt2 / d;
-        }
-    }
+
     // 利用对地高度计算初值，因为X logo被认为是在地面即d=0，但现在让其为depth=50，
     // 因此我参考系也要往上平移50
-    Eigen::Vector3d priorPw = Eigen::Vector3d::Zero();
     Eigen::Matrix3d priorWeight = Eigen::Matrix3d::Zero();
     if (historyEstPw.empty()) {
-#define CalculateInitPwByDLT 1
-
-#if !CalculateInitPwByDLT
-        for (int i = 0; i < Pc_w.size(); ++i) {
-            cout << "Pw_c[" << i
-                 << "]: " << (-Rc_w[i].transpose() * Pc_w[i]).transpose()
-                 << endl;
-            const double& depth = height2Ground[i];
-            priorPw += CalculatePriorPwByHeight(Rc_w[i].transpose(),
-                                                -Rc_w[i].transpose() * Pc_w[i],
-                                                depth, K, obvs[i]);
-        }
-        priorPw /= Pc_w.size();
-        cout << "CalculatePriorPwByHeight: " << priorPw.transpose() << endl;
-#else
-        // 使用DLT计算初始值
-        //const Eigen::Vector3d initPw1 =
-        //    EstimatePwInitialValue(Rc_w, Pc_w, obvs, K);
-        //const Eigen::Vector3d initPw2 =
-        //    EstimatePwInitialValueNormlized(Rc_w, Pc_w, obvs, K);
-        const Eigen::Matrix3d invK = K.inverse();
-        vector<vector<Eigen::Vector3d>> obvsNorm(slidingWindow.size());
-        for (int i = 0; i < obvs.size(); ++i) {
-            obvsNorm[i].resize(obvs[i].size());
-            for (int j = 0; j < obvs[i].size(); ++j) {
-                const Eigen::Vector2d& obvj = obvs[i][j];
-                obvsNorm[i][j] = invK * Eigen::Vector3d{obvj[0], obvj[1], 1};
-            }
-        }
-        const Eigen::Vector3d initPw1 =
-            EstimatePwInitialValueOnNormPlane(Rc_w, Pc_w, obvsNorm, K);
-        cout << "initPw1: " << initPw1.transpose() << endl;
-        //cout << "initPw2: " << initPw2.transpose() << endl;
-        priorPw = initPw1;
-#endif
-
+        priorWeight.setZero();
     } else {
-        priorPw = historyEstPw.back();
         Eigen::Matrix3d _cov = historyEstCov.back();
         constexpr double epsilon = 1e-10;
         _cov.diagonal() += Eigen::Vector3d::Ones() * epsilon;
@@ -643,7 +641,12 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
         priorWeight *= flatRatio;
 #endif
     }
-    SolveLandmarkPosition slp(Rc_w, Pc_w, obvs, K);
+
+    vector<Eigen::Matrix3d> Rc_ws;
+    vector<Eigen::Vector3d> Pc_ws;
+    vector<vector<Eigen::Vector2d>> obvs;
+    ExtrackPoseAndObvFromSlidingWindow(slidingWindow, Rc_ws, Pc_ws, obvs);
+    SolveLandmarkPosition slp(Rc_ws, Pc_ws, obvs, K);
     slp.SetPriorPw(priorPw);
     slp.SetPriorWeight(priorWeight);
 
@@ -651,4 +654,145 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
     cov = slp.EstimateCovariance() * noiseStd2;
     //const Eigen::Vector3d initPw = slp.GetPriorPw(); // 由历史值读取即可
     return true;
+}
+
+void CalculateInitialPwDLT(const deque<DataFrame>& slidingWindow,
+                           const Eigen::Matrix3d& K, Eigen::Vector3d& initPw,
+                           Eigen::Vector4d& singularValues) {
+    // 定义中间变量
+    vector<Eigen::Matrix3d> Rc_w(slidingWindow.size());
+    vector<Eigen::Vector3d> Pc_w(slidingWindow.size());
+    vector<double> height2Ground(slidingWindow.size());
+    vector<vector<Eigen::Vector2d>> obvs(slidingWindow.size());
+
+    ExtrackPoseAndObvFromSlidingWindow(slidingWindow, Rc_w, Pc_w, obvs);
+
+    // 保存归一化的观测均值与放缩系数
+    vector<Eigen::Vector2d> meanObvs(slidingWindow.size());
+    vector<vector<double>> scales(slidingWindow.size());
+    for (int i = 0; i < slidingWindow.size(); ++i) {
+        const DataFrame& frame = slidingWindow[i];
+        height2Ground[i] = frame.height2Ground;
+        Eigen::Vector2d meanObv = Eigen::Vector2d::Zero();
+        for (int j = 0; j < obvs[i].size(); ++j) {
+            meanObv += obvs[i][j];
+        }
+        meanObv /= obvs[i].size();
+        scales[i].resize(obvs[i].size());
+        for (int j = 0; j < obvs[i].size(); ++j) {
+            const double d = (obvs[i][j] - meanObv).norm();
+            scales[i][j] = kSqrt2 / d;
+        }
+    }
+
+#define CALCULATE_INIT_Pw_DLT 1
+
+#if !CALCULATE_INIT_Pw_DLT
+    for (int i = 0; i < Pc_w.size(); ++i) {
+        cout << "Pw_c[" << i
+             << "]: " << (-Rc_w[i].transpose() * Pc_w[i]).transpose() << endl;
+        const double& depth = height2Ground[i];
+        priorPw += CalculatePriorPwByHeight(Rc_w[i].transpose(),
+                                            -Rc_w[i].transpose() * Pc_w[i],
+                                            depth, K, obvs[i]);
+    }
+    priorPw /= Pc_w.size();
+    cout << "CalculatePriorPwByHeight: " << priorPw.transpose() << endl;
+#else
+    // 使用DLT计算初始值
+    //const Eigen::Vector3d initPw1 =
+    //    EstimatePwInitialValue(Rc_w, Pc_w, obvs, K);
+    //const Eigen::Vector3d initPw2 =
+    //    EstimatePwInitialValueNormlized(Rc_w, Pc_w, obvs, K);
+    const Eigen::Matrix3d invK = K.inverse();
+    vector<vector<Eigen::Vector3d>> obvsNorm(slidingWindow.size());
+    for (int i = 0; i < obvs.size(); ++i) {
+        obvsNorm[i].resize(obvs[i].size());
+        for (int j = 0; j < obvs[i].size(); ++j) {
+            const Eigen::Vector2d& obvj = obvs[i][j];
+            obvsNorm[i][j] = invK * Eigen::Vector3d{obvj[0], obvj[1], 1};
+        }
+    }
+
+    initPw = EstimatePwInitialValueOnNormPlane(Rc_w, Pc_w, obvsNorm, K,
+                                               singularValues);
+    cout << "initPw1: " << initPw.transpose() << endl;
+    // TODO: 这里可以检测Pw应该小于每个Pwc的值
+
+#endif
+}
+
+bool CheckInitialPwValidity(const vector<Eigen::Matrix3d>& Rc_w,
+                            const vector<Eigen::Vector3d>& Pc_w,
+                            const Eigen::Vector3d& initPw) {
+
+    const vector<Eigen::Vector3d>& Pcs = TransformPw2Pc(Rc_w, Pc_w, initPw);
+    for (int i = 0; i < Pcs.size(); ++i) {
+        if (Pcs[i].z() < 0) {
+            cerr << "Pcs[" << i << "].Z==" << Pcs[i].z() << "<0" << endl;
+            return false;
+        }
+    }
+    return true;
+}
+
+vector<int> GetEraseObservationId(const deque<DataFrame>& slidingWindow) {
+    const int midId = slidingWindow.size() / 2;
+    std::vector<int> keepIds, removeIds;
+    keepIds.push_back(midId);
+
+    int frameId = -1;
+    while (frameId < int(slidingWindow.size() - 1)) {
+        ++frameId;
+        if (frameId == midId) {
+            continue;
+        }
+
+        // 检验当前id是否值得保留
+        int keep = true;
+        for (int i = 0; i < keepIds.size(); ++i) {
+            // 检验策略：
+            // 1. 因为我们已经有了运动先验，所以可以规避飞机暂停的状态
+            // 2. 我们认为，若有水平运动，那么检测像素的偏差应该是较大的，所以这里就不检查水平平移量，一般水平平移量是要优先被考虑的，
+            //    因为其影响W的系数，并且，当飞机距离较远时，其观测像素变化量可能较小，所以还是要独立判断tx, ty变化量
+            // 3. 因此，我们仅检查像素偏差是否足够大，以确认是否可以保留
+            constexpr double minHorDiff = 0.2, minPxDiff2Keep = 3.0;
+            const int kr = keepIds[i];
+            const double horDiff =
+                (slidingWindow[kr].GetPw() - slidingWindow[frameId].GetPw())
+                    .head(2)
+                    .norm();
+            const double pxDiff = (slidingWindow[kr].GetMainObv() -
+                                   slidingWindow[frameId].GetMainObv())
+                                      .norm();
+            // 只有水平运动足够小，且像素变化也不大的才认为是重复观测
+            if (horDiff < minHorDiff && pxDiff < minPxDiff2Keep) {
+                cout << "remove id=" << frameId << "horDiff=" << horDiff
+                     << " & pxDiff=" << pxDiff << endl;
+                keep = false;
+                break;
+            }
+        }
+        if (keep) {
+            keepIds.push_back(frameId);
+        } else {
+            removeIds.push_back(frameId);
+        }
+    }
+
+    return removeIds;
+}
+
+void ExtrackPoseAndObvFromSlidingWindow(const deque<DataFrame>& slidingWindow,
+                                        vector<Eigen::Matrix3d>& Rc_ws,
+                                        vector<Eigen::Vector3d>& Pc_ws,
+                                        vector<vector<Eigen::Vector2d>>& obvs) {
+    Rc_ws.resize(slidingWindow.size());
+    Pc_ws.resize(slidingWindow.size());
+    obvs.resize(slidingWindow.size());
+    for (int i = 0; i < slidingWindow.size(); ++i) {
+        Rc_ws[i] = slidingWindow[i].Rc_w;
+        Pc_ws[i] = slidingWindow[i].Pc_w;
+        obvs[i] = slidingWindow[i].obv;
+    }
 }
