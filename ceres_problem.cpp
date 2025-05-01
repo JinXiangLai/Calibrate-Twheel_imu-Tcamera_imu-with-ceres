@@ -1,5 +1,3 @@
-#pragma once
-
 #include <ceres/ceres.h>
 #include <ceres/cost_function.h>
 #include <ceres/manifold.h>

@@ -132,6 +132,7 @@ int main(int argc, char** argv) {
     //    {-1, -1, 0},
     //    {1, -1, 0},
     //};
+    // directions = {}; // 不使用位置一致性
     for (Eigen::Vector3d& dir : directions) {
         dir.normalize();
     }
@@ -191,7 +192,7 @@ int main(int argc, char** argv) {
         const double moveDist = md(gen2);
         // 生成旋转及平移方向
         Eigen::Vector3d rotDir(0, 0, md(gen1));  // 主要绕Z轴，不然就翻车了
-        Eigen::Vector3d posDir(md(gen2), md(gen2),
+        Eigen::Vector3d posDir(0, 0,
                                md(gen2));  // 沿任何轴平移均可
 
         // 产生下一个位姿
