@@ -351,9 +351,9 @@ Eigen::Vector3d EstimatePwInitialValueOnNormPlane(
         }
     }
 
-    cout << "A34:\n" << A34 << endl;
-
-    cout << "A33:\n" << A33 << endl;
+    // 注意：A34和A33的前3列系数矩阵完全一致
+    //cout << "A34:\n" << A34 << endl;
+    //cout << "A33:\n" << A33 << endl;
 
     Eigen::JacobiSVD<Eigen::MatrixXd> svd(A34, Eigen::ComputeFullV);
     singularValues = svd.singularValues();

@@ -3,13 +3,13 @@
 using namespace std;
 
 constexpr double huberTH = 5.99;
-constexpr double noiseStd = 0.9;
+constexpr double noiseStd = 3.0;
 constexpr double noiseStd2 = noiseStd * noiseStd;
 constexpr double INF = 1e6;
 constexpr int ceresMaxIterativeTime = 1000;
 
 // 每次量测更新时所需要的最少帧数量，比这个更重要的是基线长度
-constexpr int kMinUpdateFrameNumEachTime = 5;
+constexpr int kMinUpdateFrameNumEachTime = 9;
 // 姿态、观测条件都一样的情况下，最影响地图点位置不确定度的只有基线
 // 其次就是量测的个数了，如果基线长短不断变换，那么标准差自然来回波动，
 // 如果累积基线长度不断增大，那么标准差自然不断减小，
@@ -91,6 +91,8 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
                                 const int updateTime, Eigen::Vector3d& optPw,
                                 Eigen::Matrix3d& cov);
 
+void CullingBadObservationsBeforeInit(deque<DataFrame>& slidingWindow);
+
 int main(int argc, char** argv) {
     //constexpr int X0 = 220, Y0 = 200; // 这个可能导致位置差异太大，导致无法收敛？测试显示并不是，那是为啥呢？
     // 原因应该是X、Y值差异过小，但又是为什么要这样呢？它们相对位置都差不多啊？
@@ -150,6 +152,8 @@ int main(int argc, char** argv) {
     if (noiseStd < 1.0) {
         directions = {};  // 不使用位置一致性
     }
+    cout << "noiseStd: " << noiseStd << endl;
+
     for (Eigen::Vector3d& dir : directions) {
         dir.normalize();
     }
@@ -211,28 +215,28 @@ int main(int argc, char** argv) {
         const double moveDist = md(gen2);
         // 生成旋转及平移方向
         Eigen::Vector3d rotDir(0, 0, md(gen1));  // 主要绕Z轴，不然就翻车了
-        Eigen::Vector3d posDir(0, 0,
-                               md(gen2));  // 沿任何轴平移均可
+        //Eigen::Vector3d posDir(md(gen2) * 0.01, md(gen2) * 0.01,
+        //                       md(gen2));  // 沿任何轴平移均可
+        Eigen::Vector3d posDir(md(gen2), md(gen2), 0); // 不沿Z轴
 
         // 产生下一个位姿
         Eigen::Matrix3d Rw_c2;
         Eigen::Vector3d Pw_c2;
         GenerateNextPose(lastRw_c, lastPw_c, rotDir, posDir, rotAng, moveDist,
                          Rw_c2, Pw_c2);
-        lastRw_c = Rw_c2;
-        lastPw_c = Pw_c2;
+
         if (!slidingWindow.empty()) {
-            const DataFrame& f = slidingWindow.back();
-            double moveDist =
-                (-f.Rc_w.transpose() * f.Pc_w + Rw_c2.transpose() * Pw_c2)
-                    .norm();
+            double moveDist = (lastPw_c - Pw_c2).norm();
             accumulateBaseline += moveDist;
         }
+        lastRw_c = Rw_c2;
+        lastPw_c = Pw_c2;
+
+        cout << "current accumulateBaseline: " << accumulateBaseline << endl;
 
         // 计算投影观测，并产生一帧DataFrame
         vector<Eigen::Vector2d> obvEachFrame;
         mt19937 gen(44);
-        cout << "noiseStd: " << noiseStd << endl;
         normal_distribution<double> dist(0.0, noiseStd);
         // 遍历每一个世界点，将其投影到当前帧
         const Eigen::Matrix3d& Rc_w = Rw_c2.transpose();
@@ -282,11 +286,11 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        // 显示debug合并可视化信息
-        const cv::Mat mergeImg = stitchAndDrawMatches(debugImgs, debugObvs);
-        cv::imshow("mergeImg_X0:" + to_string(X0) + "_Y0:" + to_string(Y0),
-                   mergeImg);
-        cv::waitKey(0);
+        // 显示debug合并可视化信息，注意，若需打开可视化使用，则需要释放相关内存
+        //const cv::Mat mergeImg = stitchAndDrawMatches(debugImgs, debugObvs);
+        //cv::imshow("mergeImg_X0:" + to_string(X0) + "_Y0:" + to_string(Y0),
+        //           mergeImg);
+        //cv::waitKey(0);
 
         // 执行一次滑窗优化，并弹出最老一帧
         Eigen::Vector3d priorPw, optPw;
@@ -298,32 +302,16 @@ int main(int argc, char** argv) {
             CalculateInitialPwDLT(slidingWindow, K, priorPw, singularValues);
             const double conditionNumber =
                 singularValues[0] / singularValues[2];
+            cout << "condition number: " << conditionNumber << endl;
             vector<Eigen::Matrix3d> Rc_ws;
             vector<Eigen::Vector3d> Pc_ws;
             vector<vector<Eigen::Vector2d>> obvs;
             ExtrackPoseAndObvFromSlidingWindow(slidingWindow, Rc_ws, Pc_ws,
                                                obvs);
             const bool valid = CheckInitialPwValidity(Rc_ws, Pc_ws, priorPw);
+            cout << "check init pw valid: " << valid << endl;
             if (conditionNumber > maxConditionNumber || !valid) {
-                const vector<int>& mvIds = GetEraseObservationId(slidingWindow);
-                for (const int& id : mvIds) {
-                    slidingWindow[id].timestamp = -1;
-                    // TODO： 这里删除会导致移位
-                    cerr << "will remove the id=" << id << " frame" << endl;
-                    //slidingWindow.erase(slidingWindow.begin() + id);
-                }
-
-                // 这里才能安全删除相关量
-                auto it = slidingWindow.begin();
-                while (it != slidingWindow.end()) {
-                    if (it->timestamp == -1) {
-                        cout << "erase it->t: " << it->timestamp << endl;
-                        it = slidingWindow.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-
+                CullingBadObservationsBeforeInit(slidingWindow);
                 // TODO: 重置滑窗内相关状态变量
                 continue;
             }
@@ -338,6 +326,22 @@ int main(int argc, char** argv) {
             cerr << "solve ceres failed!" << endl;
             continue;
         }
+
+        constexpr double maxMakerPosStd = 2.0;  // meters
+        // 深度为dm，归一化坐标为(xn, yn, 1)，那么(Xw, Yw) = (d*xn, d*yn)，
+        // dm=dt+Δd，那么(Xw, Yw)的误差为(Δd*xn, Δd*yn)，易知，(xn, yn)绝对值不超过，
+        // 并且：
+        // 1. 像素越靠近中心，(xn, yn)值越小，因此误差Δd引起的(ΔXw, ΔYw)越小；
+        // 2. 像素越远离中心，(xn, yn)虽然值越大，但是深度的辨识系数越显著，深度不确定度Δd越小，Δd引起的(ΔXw, ΔYw)越小
+        // 我们更关心水平位置精度，因此这里只关心水平位置精度即可
+        const Eigen::Vector3d& std = cov.diagonal().array().sqrt().transpose();
+        cout << "std: " << std.transpose() << endl;
+        if (std.head(2).norm() > maxMakerPosStd) {
+            CullingBadObservationsBeforeInit(slidingWindow);
+            continue;
+        }
+
+        isInitialized = true;
         historyEstPw.push_back(optPw);
         historyEstCov.push_back(cov);
         printf("accBaseline - lastAcc: %f-%f=%f\nSW size=%ld\n",
@@ -385,9 +389,7 @@ int main(int argc, char** argv) {
 
         // 打印输出
         //cout << "initPw: " << initPw.transpose() << endl;
-        cout << "optPw: " << optPw.transpose() << endl;
-        cout << "std: " << cov.diagonal().array().sqrt().transpose() << endl
-             << endl;
+        cout << "optPw: " << optPw.transpose() << endl << endl;
     }
 
     return 0;
@@ -458,8 +460,7 @@ Eigen::Vector3d SolveLandmarkPosition::Optimize() {
     options.minimizer_type = ceres::TRUST_REGION;
     options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT;
     options.logging_type =
-        ceres::PER_MINIMIZER_ITERATION;  // 设置输出log便于bug排查
-    options.logging_type = ceres::PER_MINIMIZER_ITERATION;  // ceres::SILENT;
+        ceres::SILENT;  // PER_MINIMIZER_ITERATION;  // 设置输出log便于bug排查
     options.function_tolerance = 1e-12;
     options.inner_iteration_tolerance = 1e-6;
 
@@ -737,7 +738,8 @@ bool CheckInitialPwValidity(const vector<Eigen::Matrix3d>& Rc_w,
 }
 
 vector<int> GetEraseObservationId(const deque<DataFrame>& slidingWindow) {
-    const int midId = slidingWindow.size() / 2;
+    //const int midId = slidingWindow.size() / 2;
+    const int midId = 0;  // 保留首帧以保证基线长度持续增长
     std::vector<int> keepIds, removeIds;
     keepIds.push_back(midId);
 
@@ -794,5 +796,26 @@ void ExtrackPoseAndObvFromSlidingWindow(const deque<DataFrame>& slidingWindow,
         Rc_ws[i] = slidingWindow[i].Rc_w;
         Pc_ws[i] = slidingWindow[i].Pc_w;
         obvs[i] = slidingWindow[i].obv;
+    }
+}
+
+void CullingBadObservationsBeforeInit(deque<DataFrame>& slidingWindow) {
+    const vector<int>& mvIds = GetEraseObservationId(slidingWindow);
+    for (const int& id : mvIds) {
+        slidingWindow[id].timestamp = -1;
+        // TODO： 这里删除会导致移位
+        cerr << "will remove the id=" << id << " frame" << endl;
+        //slidingWindow.erase(slidingWindow.begin() + id);
+    }
+
+    // 这里才能安全删除相关量
+    auto it = slidingWindow.begin();
+    while (it != slidingWindow.end()) {
+        if (it->timestamp == -1) {
+            cout << "erase it->t: " << it->timestamp << endl;
+            it = slidingWindow.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
