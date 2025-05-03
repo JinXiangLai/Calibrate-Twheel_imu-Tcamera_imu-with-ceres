@@ -3,7 +3,7 @@
 using namespace std;
 
 constexpr double huberTH = 5.99;
-constexpr double noiseStd = 3.0;
+constexpr double noiseStd = 0.9;
 constexpr double noiseStd2 = noiseStd * noiseStd;
 constexpr double INF = 1e6;
 constexpr int ceresMaxIterativeTime = 1000;
@@ -205,6 +205,7 @@ int main(int argc, char** argv) {
 
     int updateTime = 0;
     while (updateTime < maxUpdateTime) {
+        cout << endl;
         //random_device rd; // 不使用真随机数
         mt19937 gen1(42), gen2(43);
         uniform_real_distribution<double> rd(rotRange.x(), rotRange.y());
@@ -215,9 +216,9 @@ int main(int argc, char** argv) {
         const double moveDist = md(gen2);
         // 生成旋转及平移方向
         Eigen::Vector3d rotDir(0, 0, md(gen1));  // 主要绕Z轴，不然就翻车了
-        //Eigen::Vector3d posDir(md(gen2) * 0.01, md(gen2) * 0.01,
-        //                       md(gen2));  // 沿任何轴平移均可
-        Eigen::Vector3d posDir(md(gen2), md(gen2), 0); // 不沿Z轴
+        Eigen::Vector3d posDir(md(gen2) * 0.01, md(gen2) * 0.01,
+                               md(gen2));  // 沿任何轴平移均可
+        //Eigen::Vector3d posDir(md(gen2), md(gen2), 0); // 不沿Z轴
 
         // 产生下一个位姿
         Eigen::Matrix3d Rw_c2;
@@ -297,7 +298,7 @@ int main(int argc, char** argv) {
         Eigen::Matrix3d cov = Eigen::Matrix3d::Constant(INF);
 
         if (!isInitialized) {
-            constexpr double maxConditionNumber = 50;
+            constexpr double maxConditionNumber = 10;
             Eigen::Vector4d singularValues{0, 0, 0, 0};
             CalculateInitialPwDLT(slidingWindow, K, priorPw, singularValues);
             const double conditionNumber =
@@ -327,7 +328,7 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        constexpr double maxMakerPosStd = 2.0;  // meters
+        constexpr double maxMakerPosStd = 3.0 * noiseStd;  // meters，条件数越小，这个相对调大
         // 深度为dm，归一化坐标为(xn, yn, 1)，那么(Xw, Yw) = (d*xn, d*yn)，
         // dm=dt+Δd，那么(Xw, Yw)的误差为(Δd*xn, Δd*yn)，易知，(xn, yn)绝对值不超过，
         // 并且：
@@ -366,13 +367,13 @@ int main(int argc, char** argv) {
                                    last.Rc_w.transpose() * last.Pc_w)
                                       .head(3)
                                       .norm();
-                printf("id=%d, bs=%f\n", i, bs);
+                //printf("id=%d, bs=%f\n", i, bs);
                 if (bs < minHorizontalBaseline) {
                     minHorizontalBaseline = bs;
                     minDistId = i;
                 }
             }
-            printf("midId=%d, minDist=%f\n", minDistId, minHorizontalBaseline);
+            //printf("midId=%d, minDist=%f\n", minDistId, minHorizontalBaseline);
 
             slidingWindow.erase(slidingWindow.begin() + minDistId);
             debugImgs.erase(debugImgs.begin() + minDistId);
@@ -389,7 +390,7 @@ int main(int argc, char** argv) {
 
         // 打印输出
         //cout << "initPw: " << initPw.transpose() << endl;
-        cout << "optPw: " << optPw.transpose() << endl << endl;
+        cout << "optPw: " << optPw.transpose() << endl;
     }
 
     return 0;
