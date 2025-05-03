@@ -47,5 +47,3 @@ add_executable(optimizaLandmarkPosition optimizaLandmarkPosition.cpp)
 add_executable(larndmark_radius_to_evaluate_depth larndmark_radius_to_evaluate_depth.cpp)
 add_executable(optimizaLandmarkPosition_no_normlized_obv_in_ceres optimizaLandmarkPosition_no_normlized_obv_in_ceres.cpp)
 add_executable(degerate_coefficient_matrix degerate_coefficient_matrix.cpp)
-
-

@@ -4,7 +4,7 @@ using namespace std;
 
 int main() {
     const double x = 3, y = 4;  // 目标解
-    const double noise = 0.1, estX = x + noise;
+    const double noise = 0.1, estX = x + noise; // 最优解有噪声很正常
 
     // 退化系数矩阵
     Eigen::Matrix2d A0;
@@ -17,7 +17,7 @@ int main() {
     Eigen::JacobiSVD<Eigen::Matrix2d> svd0(A0, Eigen::ComputeFullV);
     cout << "A0 singular value: " << svd0.singularValues().transpose() << endl;
     cout << "condition number 0: " << svd0.singularValues()[0]/svd0.singularValues()[1] << endl;
-    cout << "res0: " << res0.transpose() << endl;
+    cout << "res0: " << res0.transpose() << endl << endl;
 
     Eigen::Matrix2d A1;
     A1 << 1, 1.1, 1, 2.0;
@@ -26,9 +26,9 @@ int main() {
         estX * A1.row(1)[0] + y * A1.row(1)[1];
     const Eigen::Vector2d res1 = A1.colPivHouseholderQr().solve(b1);
     Eigen::JacobiSVD<Eigen::Matrix2d> svd1(A1, Eigen::ComputeFullV);
-    cout << "A0 singular value: " << svd1.singularValues().transpose() << endl;
+    cout << "A1 singular value: " << svd1.singularValues().transpose() << endl;
     cout << "condition number 1: " << svd1.singularValues()[0]/svd1.singularValues()[1] << endl;
-    cout << "res1: " << res1.transpose() << endl;
+    cout << "res1: " << res1.transpose() << endl << endl;
 
     const Eigen::Vector3d a(1, 2, 3), b(4, 5, 6);
     const Eigen::Vector3d cr0 = a.cross(b);

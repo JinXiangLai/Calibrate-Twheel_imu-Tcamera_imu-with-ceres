@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
 
         // 位姿添加到滑窗
         DataFrame frame(Rw_c2.transpose(), Rw_c2.transpose() * -Pw_c2, depth,
-                        obvs, double(updateTime));
+                        obvs, double(updateTime), debugImg);
         slidingWindow.push_back(frame);
         debugObvs.push_back(obvs);
         debugImgs.push_back(debugImg);
