@@ -114,5 +114,9 @@ Eigen::Vector3d LogSO3(const Eigen::Matrix3d& R);
 
 Eigen::Matrix3d InverseRightJacobianSO3(const double x, const double y,
                                         const double z);
-                                        
+
 Eigen::Matrix3d InverseRightJacobianSO3(const Eigen::Vector3d& v);
+
+void PrintReprojectErrorEachFrame(const std::deque<DataFrame>& sw,
+                                  const Eigen::Vector3d& Pw,
+                                  const Eigen::Matrix3d& K);

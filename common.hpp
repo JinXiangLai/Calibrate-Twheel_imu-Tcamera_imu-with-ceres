@@ -11,8 +11,12 @@ constexpr double kSqrt2 = 1.414213562;  // sqrt(2);
 
 // 行优先存入
 // clang-format off
-const Eigen::Matrix3d K = (Eigen::Matrix3d() << 400.0, 0.0, 320.0,
-                                                0.0, 320.0, 240.0,
+constexpr double kFx = 400;
+constexpr double kFy = 320;
+constexpr double kCx = 320;
+constexpr double kCy = 240;
+const Eigen::Matrix3d K = (Eigen::Matrix3d() << kFx, 0.0, kCx,
+                                                0.0, kFy, kCy,
                                                 0.0, 0.0, 1.0).finished();
 const Eigen::Matrix3d invK = K.inverse();
 

@@ -7,9 +7,16 @@
 
 using namespace std;
 
-constexpr double huberTH = 5.99;
+constexpr double huberTH = 15.99;
 constexpr double noiseStd = 3.0;
 constexpr double noiseStd2 = noiseStd * noiseStd;
+#if RESIDUAL_ON_NORMLIZED_PLANE
+const double kRatio = kSqrt2 / (sqrt(kFx * kFx + kFy * kFy));
+const double huberTHnorm = kRatio * huberTH;
+const double noiseStdNorm = kRatio * noiseStd;
+const double noiseStdNorm2 = noiseStdNorm * noiseStdNorm;
+#endif
+
 constexpr double INF = 1e6;
 constexpr int ceresMaxIterativeTime = 1000;
 
@@ -93,6 +100,10 @@ int main(int argc, char** argv) {
     }
     printf("Current parameters:\n\tX0=%d, Y0=%d, radius=%f,  depth=%f\n", X0,
            Y0, radius, depth);
+
+#if RESIDUAL_ON_NORMLIZED_PLANE
+    printf("huberTHnorm=%f, noiseStdNorm=%f\n", huberTHnorm, noiseStdNorm);
+#endif
 
     const Eigen::Vector3d Pw0 = depth * invK * Eigen::Vector3d(X0, Y0, 1);
 
@@ -214,7 +225,11 @@ int main(int argc, char** argv) {
 
             const Eigen::Vector2d noise{int(dist(gen)), int(dist(gen))};
             const Eigen::Vector2d _obv_noisy = _obv + noise;
-            obvEachFrame.push_back(_obv_noisy);
+            if (j != 0) {
+                obvEachFrame.push_back(_obv_noisy);
+            } else {
+                obvEachFrame.push_back(_obv);
+            }
 
             //cout << "noise: " << noise.transpose() << endl;
             //cout << "obv: " << _obv.transpose() << endl;
@@ -274,6 +289,13 @@ int main(int argc, char** argv) {
                 CullingBadObservationsBeforeInit(slidingWindow);
                 // TODO: 重置滑窗内相关状态变量
                 continue;
+            } else {
+                // TODO: 输出理论真值的残差
+                PrintReprojectErrorEachFrame(slidingWindow, Pws.col(0), K);
+                const Eigen::Vector3d diffPw =
+                    Pws.col(0) + Eigen::Vector3d(0.5, 0.5, 0.0);
+                PrintReprojectErrorEachFrame(slidingWindow, diffPw, K);
+                PrintReprojectErrorEachFrame(slidingWindow, priorPw, K);
             }
         } else {
             if (!CheckLastestObservationUseful(slidingWindow)) {
@@ -300,7 +322,7 @@ int main(int argc, char** argv) {
         }
 
         constexpr double maxMakerPosStd =
-            3.0 * noiseStd;  // meters，条件数越小，这个相对调大
+            3.0;  // meters，条件数越小，这个相对调大
         // 深度为dm，归一化坐标为(xn, yn, 1)，那么(Xw, Yw) = (d*xn, d*yn)，
         // dm=dt+Δd，那么(Xw, Yw)的误差为(Δd*xn, Δd*yn)，易知，(xn, yn)绝对值不超过，
         // 并且：
@@ -323,6 +345,7 @@ int main(int argc, char** argv) {
                slidingWindow.size());
         lastUpdateAccBaseline = accumulateBaseline;
         ++updateTime;
+        PrintReprojectErrorEachFrame(slidingWindow, optPw, K);
 
         // 移除滑动窗口元素
         auto MoveSlidingWindow = [&slidingWindow]() -> void {
@@ -392,10 +415,14 @@ Eigen::Vector3d SolveLandmarkPosition::Optimize() {
             ceres::CostFunction* cost_function =
                 new ProjectionResidual(Rc_w_[i], Pc_w_[i], obv, K_);
 
+#if RESIDUAL_ON_NORMLIZED_PLANE
             // 2、再指定残差块，这样就不需要再后续指定problem.SetManifold(q,
             // quaternion_parameterization)
             // 距离越远，容忍的像素误差越小
+            ceres::LossFunction* huber = new ceres::HuberLoss(huberTHnorm);
+#else
             ceres::LossFunction* huber = new ceres::HuberLoss(huberTH);
+#endif
             problem_.AddResidualBlock(cost_function, huber, optPw_.data());
         }
     }
@@ -413,10 +440,17 @@ Eigen::Vector3d SolveLandmarkPosition::Optimize() {
     options.linear_solver_type = ceres::DENSE_QR;
     options.minimizer_type = ceres::TRUST_REGION;
     options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT;
-    options.logging_type =
-        ceres::SILENT;  // PER_MINIMIZER_ITERATION;  // 设置输出log便于bug排查
+    // 设置输出log便于bug排查
+    options.logging_type = ceres::PER_MINIMIZER_ITERATION;  // SILENT;
     options.function_tolerance = 1e-12;
     options.inner_iteration_tolerance = 1e-6;
+
+#if RESIDUAL_ON_NORMLIZED_PLANE
+    options.max_num_iterations = 50; // 归一化平面收敛快，可适当减小迭代次数
+    options.gradient_tolerance = 1e-12; // 防止过快终止，适当减小
+    options.function_tolerance = 1e-15; // 适当减小以匹配归一化残差量级
+    options.parameter_tolerance = 1e-10;
+#endif
 
     // 运行优化
     ceres::Solver::Summary summary;
@@ -447,7 +481,13 @@ bool SolveLandmarkPosition::EstimateCovariance(
     } else {
         covariance.GetCovarianceBlock(optPw_.data(), optPw_.data(),
                                       covMatrix.data());
-        covMatrix *= noiseStd2;
+        if (noiseStd2 > 0.0) {
+#if RESIDUAL_ON_NORMLIZED_PLANE
+            covMatrix *= noiseStdNorm2;
+#else
+            covMatrix *= noiseStd2;
+#endif
+        }
         return true;
 
         // Output the covariance matrix

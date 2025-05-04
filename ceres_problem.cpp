@@ -9,12 +9,17 @@ ProjectionResidual::ProjectionResidual(const Eigen::Matrix3d& _Rc_w,
                                        const Eigen::Vector3d& _Pc_w,
                                        const Eigen::Vector2d& _obv,
                                        const Eigen::Matrix3d& _K)
-    : Rc_w_(_Rc_w), Pc_w_(_Pc_w), obv_(_obv), K(_K) {
+    : Rc_w_(_Rc_w), Pc_w_(_Pc_w), obv_(_obv), K_(_K) {
     // SizedCostFunction同样继承自CostFunction，
     // 若不使用SizedCostFunction，则需要手动设置残差维度和参数块大小
     set_num_residuals(2);
     // 这里
     mutable_parameter_block_sizes()->push_back(3);
+
+#if RESIDUAL_ON_NORMLIZED_PLANE
+    obvNorm_ << (obv_[0] - kCx) / kFx,
+        (obv_[1] - kCy) / kFy;
+#endif
 }
 
 bool ProjectionResidual::Evaluate(double const* const* parameters,
@@ -26,11 +31,18 @@ bool ProjectionResidual::Evaluate(double const* const* parameters,
     // 重投影
     const Eigen::Matrix<double, 3, 1> Pc = Rc_w_ * Pw + Pc_w_;
     const Eigen::Matrix<double, 3, 1> Pn = Pc / Pc[2];
-    const Eigen::Matrix<double, 2, 1> obv = K.block(0, 0, 2, 3) * Pn;
 
+#if RESIDUAL_ON_NORMLIZED_PLANE
+    const Eigen::Matrix<double, 2, 1> obv = Pn.head(2);
+    // 计算残差
+    residuals[0] = obv(0) - obvNorm_(0);
+    residuals[1] = obv(1) - obvNorm_(1);
+#else
+    const Eigen::Matrix<double, 2, 1> obv = K_.block(0, 0, 2, 3) * Pn;
     // 计算残差
     residuals[0] = obv(0) - obv_(0);
     residuals[1] = obv(1) - obv_(1);
+#endif
 
     // 计算雅可比
     if (jacobians) {
@@ -39,14 +51,26 @@ bool ProjectionResidual::Evaluate(double const* const* parameters,
             Eigen::Map<Eigen::Matrix<double, 2, 3, Eigen::RowMajor>> j(
                 jacobians[0]);
             j.setZero();
-            const Eigen::Matrix<double, 2, 3> J_r_Pn = K.block(0, 0, 2, 3);
+
             const double invZ = 1 / Pc[2];
             const double invZ2 = invZ * invZ;
+
+#if RESIDUAL_ON_NORMLIZED_PLANE
+            // clang-format off
+            // J_res_Pn = Eigen::Matrix2d::Identity();
+            const Eigen::Matrix<double, 2, 3> J_Pn_Pc =
+                (Eigen::Matrix<double, 2, 3>() << invZ, 0, -Pc[0] * invZ2, 
+                                                  0, invZ, -Pc[1] * invZ2).finished();
+            j = J_Pn_Pc * Rc_w_;
+#else
             const Eigen::Matrix3d J_Pn_Pc =
-                (Eigen::Matrix3d() << invZ, 0, -Pc[0] * invZ2, 0, invZ,
-                 -Pc[1] * invZ2, 0, 0, 0)
-                    .finished();
+                (Eigen::Matrix3d() << invZ, 0, -Pc[0] * invZ2, 
+                                      0, invZ, -Pc[1] * invZ2, 
+                                      0, 0, 0).finished();
+            const Eigen::Matrix<double, 2, 3> J_r_Pn = K.block(0, 0, 2, 3);
             j = J_r_Pn * J_Pn_Pc * Rc_w_;
+            // clang-format on
+#endif
         }
     }
 

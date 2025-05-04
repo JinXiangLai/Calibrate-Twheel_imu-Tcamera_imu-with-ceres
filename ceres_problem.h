@@ -14,6 +14,8 @@
 #define USE_AUTO_DIFF 0
 #define ROT_RES_DIM 3
 
+#define RESIDUAL_ON_NORMLIZED_PLANE 0
+
 // =======================================================================//
 // =======================================================================//
 
@@ -29,7 +31,11 @@ class ProjectionResidual : public ceres::CostFunction {
     Eigen::Matrix3d Rc_w_;
     Eigen::Vector3d Pc_w_;
     Eigen::Vector2d obv_;
-    Eigen::Matrix3d K;
+    Eigen::Matrix3d K_;
+
+#if RESIDUAL_ON_NORMLIZED_PLANE
+    Eigen::Vector2d obvNorm_;
+#endif
 };
 
 class PriorPwResidual : public ceres::CostFunction {

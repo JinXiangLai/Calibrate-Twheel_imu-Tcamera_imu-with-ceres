@@ -691,3 +691,20 @@ Eigen::Matrix3d InverseRightJacobianSO3(const double x, const double y,
 Eigen::Matrix3d InverseRightJacobianSO3(const Eigen::Vector3d& v) {
     return InverseRightJacobianSO3(v[0], v[1], v[2]);
 }
+
+void PrintReprojectErrorEachFrame(const std::deque<DataFrame>& sw,
+                                  const Eigen::Vector3d& Pw,
+                                  const Eigen::Matrix3d& K) {
+    cout << "each frame obv residual(pixels) in Pw: " << Pw.transpose() << endl;
+    for (const DataFrame& f : sw) {
+        cout << f.GetObvResidual(Pw, K) << " ";
+    }
+    cout << endl;
+
+    constexpr double inflatRatio = 100;
+    cout << "each frame obv residual(norm plane) in Pw: " << Pw.transpose() << endl;
+    for (const DataFrame& f : sw) {
+        cout << f.GetNormObvResidual(Pw) * inflatRatio << " ";
+    }
+    cout << endl;
+}
