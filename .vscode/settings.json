@@ -4,6 +4,8 @@
         "--compile-commands-dir=${workspaceFolder}/../build",
         "--header-insertion=never"
     ],
+    "clangd.path": "clangd-9",
+    "cmake.buildDirectory": "${workspaceFolder}/../build",
     //"clangd.inactiveRegions.opacity": 0.55,
     //"editor.semanticHighlighting": true
     //自定义注释颜色

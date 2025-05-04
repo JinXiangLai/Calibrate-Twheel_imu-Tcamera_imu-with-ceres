@@ -23,8 +23,12 @@ include_directories(
   ${PROJECT_SOURCE_DIR}
 )
 
-add_library(ceres_problem_lib ceres_problem.cpp)
-target_link_libraries(ceres_problem_lib  
+add_library(useful_lib SHARED
+  utils.cpp
+  classes.cpp
+  ceres_problem.cpp
+)
+target_link_libraries(useful_lib 
   Eigen3::Eigen
   #ceres::ceres # 这样写就行不通
   Ceres::ceres # 若是使用ceres会与opencv的冲突，所以必须要命名空间，这里的命名空间就是存放libceres.a的文件夹名字
@@ -37,13 +41,12 @@ link_libraries(
   #ceres::ceres # 这样写就行不通
   Ceres::ceres # 若是使用ceres会与opencv的冲突，所以必须要命名空间，这里的命名空间就是存放libceres.a的文件夹名字
   ${OpenCV_LIBS}
-  ceres_problem_lib
+  useful_lib
 )
 
 # 添加可执行文件
 add_executable(imu_wheel_calibration imuWheelCalibrate.cpp)
 add_executable(imu_camera_calibration TcbCalibrate.cpp)
-add_executable(optimizaLandmarkPosition optimizaLandmarkPosition.cpp)
 add_executable(larndmark_radius_to_evaluate_depth larndmark_radius_to_evaluate_depth.cpp)
-add_executable(optimizaLandmarkPosition_no_normlized_obv_in_ceres optimizaLandmarkPosition_no_normlized_obv_in_ceres.cpp)
+add_executable(optimizaLandmarkPosition optimizaLandmarkPosition.cpp)
 add_executable(degerate_coefficient_matrix degerate_coefficient_matrix.cpp)

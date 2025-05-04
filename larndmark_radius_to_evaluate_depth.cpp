@@ -1,4 +1,6 @@
 // 利用已知marker的半径，来估计深度
+#include <random>
+
 #include "common.hpp"
 
 using namespace std;

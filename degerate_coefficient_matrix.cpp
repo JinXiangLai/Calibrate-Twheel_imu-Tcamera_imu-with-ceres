@@ -1,4 +1,8 @@
+// 研究系数矩阵量级与条件数、奇异值、解精度的关系
+
 #include "common.hpp"
+
+#include "utils.h"
 
 using namespace std;
 
