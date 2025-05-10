@@ -30,7 +30,14 @@ Eigen::Vector2d ProjectPw2PixelPlane(const Eigen::Matrix3d& Rc_w,
 
 Eigen::Matrix<double, 2, 3> CalculateObvWrtPwJacobian(
     const Eigen::Matrix3d& Rc_w, const Eigen::Vector3d& Pc_w,
-    const Eigen::Vector3d& K, const Eigen::Vector3d& Pc);
+    const Eigen::Matrix3d& K, const Eigen::Vector3d& Pw);
+
+Eigen::Matrix3d CalculateHessianMatrix(
+    const std::deque<DataFrame>& slidingWindow, const Eigen::Matrix3d& K,
+    const Eigen::Vector3d& Pw);
+
+bool CalculateCovariance(const Eigen::Matrix3d& H, Eigen::Matrix3d& cov,
+                         const double& sigma2 = 9);
 
 std::vector<Eigen::Vector3d> TransformPw2Pc(
     const std::vector<Eigen::Matrix3d>& Rc_ws,

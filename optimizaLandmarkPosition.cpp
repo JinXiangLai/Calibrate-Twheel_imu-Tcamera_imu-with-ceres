@@ -480,9 +480,9 @@ Eigen::Vector3d SolveLandmarkPosition::Optimize() {
 bool SolveLandmarkPosition::EstimateCovariance(
     Eigen::Matrix<double, 3, 3, Eigen::RowMajor>& covMatrix) {
     ceres::Covariance::Options options_cov;
-    options_cov.null_space_rank = 0;  // 不为0时在信息矩阵不可逆时才能计算伪逆
-    // 最小互反条件数
-    options_cov.min_reciprocal_condition_number = 1e-10;
+    options_cov.null_space_rank = 0;  // 需要截断的最小奇异值数量
+    // 最小互反条件数，即条件数的相反数
+    options_cov.min_reciprocal_condition_number = 1e-6;
     // 使用SVD分解计算伪逆，虽不要求满秩，但是非常耗时 1.0s+
     options_cov.algorithm_type = ceres::CovarianceAlgorithmType::DENSE_SVD;
     // options_cov.algorithm_type = ceres::CovarianceAlgorithmType::SPARSE_QR;
@@ -495,7 +495,6 @@ bool SolveLandmarkPosition::EstimateCovariance(
     covMatrix.setConstant(INF);
     if (!covariance.Compute({optPw_.data()}, &problem_)) {
         cerr << "Failed to compute covariance！！！" << endl;
-        cout << "Failed to compute covariance！！！" << endl;
         return false;
     } else {
         covariance.GetCovarianceBlock(optPw_.data(), optPw_.data(),
@@ -562,12 +561,20 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
     slp.SetPriorWeight(priorWeight);
 
     optPw = slp.Optimize();
-    Eigen::Matrix<double, 3, 3, Eigen::RowMajor> covMatrix;
-    if (slp.EstimateCovariance(covMatrix)) {
-        cov = covMatrix;
+
+    const Eigen::Matrix3d& H = CalculateHessianMatrix(slidingWindow, K, optPw);
+    if(CalculateCovariance(H, cov, 1.0)) {
         return true;
     } else {
         return false;
     }
+
+    // Eigen::Matrix<double, 3, 3, Eigen::RowMajor> covMatrix;
+    //if (slp.EstimateCovariance(covMatrix)) {
+    //    cov = covMatrix;
+    //    return true;
+    //} else {
+    //    return false;
+    //}
     //const Eigen::Vector3d initPw = slp.GetPriorPw(); // 由历史值读取即可
 }

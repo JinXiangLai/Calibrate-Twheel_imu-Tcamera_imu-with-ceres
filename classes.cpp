@@ -46,12 +46,12 @@ void PriorEstimateData::UpdateMeanAndH(const Eigen::Vector3d& p,
     UpdateMessageMatrix(cov);
 }
 
-double DataFrame::GetObvResidual(const Eigen::Vector3d& Pw,
+Eigen::Vector2d DataFrame::GetObvResidual(const Eigen::Vector3d& Pw,
                                  const Eigen::Matrix3d& K) const {
-    const Eigen::Vector3d& Pc = Rc_w * Pw + Pc_w;
+    const Eigen::Vector3d& Pc = GetPc(Pw);
     const Eigen::Vector3d& Pn = Pc / Pc.z();
     const Eigen::Vector2d& estObv = K.block(0, 0, 2, 3) * Pn;
-    return (estObv - obv[0]).norm();
+    return (estObv - obv[0]);
 }
 
 double DataFrame::GetNormObvResidual(const Eigen::Vector3d& Pw) const {

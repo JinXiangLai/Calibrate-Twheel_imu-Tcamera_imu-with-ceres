@@ -11,10 +11,14 @@ struct DataFrame {
               const double& _t, const cv::Mat& img);
 
     Eigen::Vector3d GetPw() const { return -Rc_w.transpose() * Pc_w; }
+    Eigen::Vector3d GetPc(const Eigen::Vector3d& Pw) const {return Rc_w * Pw + Pc_w;}
     Eigen::Vector2d GetMainObv() const { return obv[0]; }
     // TODO: 可以根据残差去剔除一些没有收敛的观测以期提高精度
-    double GetObvResidual(const Eigen::Vector3d& Pw,
+    Eigen::Vector2d GetObvResidual(const Eigen::Vector3d& Pw,
                           const Eigen::Matrix3d& K) const;
+    //Eigen::Vector2d GetObvResidual(const Eigen::Vector3d& Pc){
+    //    const Eigen::Vector2d Pn = Pc/Pc.z()
+    //}
     double GetNormObvResidual(const Eigen::Vector3d& Pw) const;
 
     double timestamp = 0.;

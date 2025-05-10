@@ -37,7 +37,7 @@ Eigen::Vector2d ProjectPw2PixelPlane(const Eigen::Matrix3d& Rc_w,
 
 Eigen::Matrix<double, 2, 3> CalculateObvWrtPwJacobian(
     const Eigen::Matrix3d& Rc_w, const Eigen::Vector3d& Pc_w,
-    const Eigen::Vector3d& K, const Eigen::Vector3d& Pc) {
+    const Eigen::Matrix3d& K, const Eigen::Vector3d& Pc) {
 
     const Eigen::Matrix<double, 2, 3> J_r_Pn = K.block(0, 0, 2, 3);
     const double invZ = 1 / Pc[2];
@@ -697,14 +697,63 @@ void PrintReprojectErrorEachFrame(const std::deque<DataFrame>& sw,
                                   const Eigen::Matrix3d& K) {
     cout << "each frame obv residual(pixels) in Pw: " << Pw.transpose() << endl;
     for (const DataFrame& f : sw) {
-        cout << f.GetObvResidual(Pw, K) << " ";
+        cout << f.GetObvResidual(Pw, K).norm() << " ";
     }
     cout << endl;
 
     constexpr double inflatRatio = 100;
-    cout << "each frame obv residual(norm plane) in Pw: " << Pw.transpose() << endl;
+    cout << "each frame obv residual(norm plane) in Pw: " << Pw.transpose()
+         << endl;
     for (const DataFrame& f : sw) {
         cout << f.GetNormObvResidual(Pw) * inflatRatio << " ";
     }
     cout << endl;
+}
+
+Eigen::Matrix3d CalculateHessianMatrix(
+    const std::deque<DataFrame>& slidingWindow, const Eigen::Matrix3d& K,
+    const Eigen::Vector3d& Pw) {
+
+#define USE_ALL_OBV 1
+    Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
+    for (int i = 0; i < slidingWindow.size(); ++i) {
+        // 观察雅可比我们可以发现：雅可比与量测无关，因此这里只需要计算主量测即可
+        const DataFrame& f = slidingWindow[i];
+        const Eigen::Vector3d& Pci = f.GetPc(Pw);
+
+        const Eigen::Matrix<double, 2, 3> Ji =
+            CalculateObvWrtPwJacobian(f.Rc_w, f.Pc_w, K, Pci);
+        const double wi = 1.0;
+#if USE_ALL_OBV
+        H += f.obv.size() * wi * Ji.transpose() * Ji;
+#else
+        H += wi * Ji.transpose() * Ji;
+#endif
+    }
+
+    return H;
+}
+
+bool CalculateCovariance(const Eigen::Matrix3d& H, Eigen::Matrix3d& cov,
+                         const double& sigma2) {
+    constexpr double minInverseConditionNumber = 1e-6;  // 避免除以0
+
+    Eigen::JacobiSVD<Eigen::Matrix3d> svd(
+        H, Eigen::ComputeFullU | Eigen::ComputeFullV);
+
+    const Eigen::Vector3d& s = svd.singularValues();
+    const double invConditionNum = s[2] / s[1];
+    if (invConditionNum < minInverseConditionNumber) {
+        cerr << "singularValues: " << s.transpose() << endl
+             << "invConditionNum: " << invConditionNum << endl;
+        return false;
+    }
+
+    const Eigen::Matrix3d& U = svd.matrixU();
+    const Eigen::Matrix3d& V = svd.matrixV();
+    Eigen::Matrix3d S = Eigen::Matrix3d::Identity();
+    S.diagonal() << 1 / s[0], 1 / s[1], 1 / s[2];
+
+    cov = sigma2 * V * S * U.transpose();
+    return true;
 }
