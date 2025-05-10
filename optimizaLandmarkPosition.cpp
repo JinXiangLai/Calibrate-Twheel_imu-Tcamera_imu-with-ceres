@@ -17,7 +17,7 @@ const double noiseStdNorm = kRatio * noiseStd;
 const double noiseStdNorm2 = noiseStdNorm * noiseStdNorm;
 #endif
 
-constexpr double INF = 1e6;
+constexpr double INF = 1e12;
 constexpr int ceresMaxIterativeTime = 1000;
 
 // 每次量测更新时所需要的最少帧数量，比这个更重要的是基线长度
@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
     // 6. SVD求解Ax=0过程中，+X与-X都是解，我们要保证取+X
     // 设置一个在首个相机系下的深度
     double depth = 50.0;  // 认为是对地高度
-
+    int maxUpdateTime = 10;
     printf("Default parameters:\n\tX0=%d, Y0=%d, radius=%f, depth=%f\n", X0, Y0,
            radius, depth);
     if (argc > 2) {
@@ -97,6 +97,9 @@ int main(int argc, char** argv) {
     }
     if (argc > 4) {
         depth = atof(argv[4]);
+    }
+    if (argc > 5){
+        maxUpdateTime = atoi(argv[5]);
     }
     printf("Current parameters:\n\tX0=%d, Y0=%d, radius=%f,  depth=%f\n", X0,
            Y0, radius, depth);
@@ -160,7 +163,6 @@ int main(int argc, char** argv) {
     double lastUpdateAccBaseline = 0.0;
 
     // 设置运动参数
-    constexpr int maxUpdateTime = 100;
     const Eigen::Vector2d rotRange(-0.05, 0.1);  // degree
     // TODO: 实验显示，帧间距离越近，不确定度会非常大
     //const Eigen::Vector2d moveRange(0.01, 0.1);  // meter
@@ -182,9 +184,13 @@ int main(int argc, char** argv) {
         const double moveDist = md(gen2);
         // 生成旋转及平移方向
         Eigen::Vector3d rotDir(0, 0, md(gen1));  // 主要绕Z轴，不然就翻车了
-        //Eigen::Vector3d posDir(md(gen2) * 0.01, md(gen2) * 0.01,
-        //                       md(gen2));  // 沿任何轴平移均可
-        Eigen::Vector3d posDir(md(gen2), md(gen2), 0);  // 不沿Z轴
+
+        Eigen::Vector3d posDir(0, 0, 0);
+        if (isInitialized && 0)
+            posDir = Eigen::Vector3d(md(gen2) * 0.01, md(gen2) * 0.01,
+                                     md(gen2));  // 沿任何轴平移均可
+        else
+            posDir = Eigen::Vector3d(md(gen2), md(gen2), 0);  // 不沿Z轴
 
         // 产生下一个位姿
         Eigen::Matrix3d Rw_c2;
@@ -291,11 +297,11 @@ int main(int argc, char** argv) {
                 continue;
             } else {
                 // TODO: 输出理论真值的残差
-                PrintReprojectErrorEachFrame(slidingWindow, Pws.col(0), K);
-                const Eigen::Vector3d diffPw =
-                    Pws.col(0) + Eigen::Vector3d(0.5, 0.5, 0.0);
-                PrintReprojectErrorEachFrame(slidingWindow, diffPw, K);
-                PrintReprojectErrorEachFrame(slidingWindow, priorPw, K);
+                //PrintReprojectErrorEachFrame(slidingWindow, Pws.col(0), K);
+                //const Eigen::Vector3d diffPw =
+                //    Pws.col(0) + Eigen::Vector3d(0.5, 0.5, 0.0);
+                //PrintReprojectErrorEachFrame(slidingWindow, diffPw, K);
+                //PrintReprojectErrorEachFrame(slidingWindow, priorPw, K);
             }
         } else {
             if (!CheckLastestObservationUseful(slidingWindow)) {
@@ -330,10 +336,20 @@ int main(int argc, char** argv) {
         // 2. 像素越远离中心，(xn, yn)虽然值越大，但是深度的辨识系数越显著，深度不确定度Δd越小，Δd引起的(ΔXw, ΔYw)越小
         // 我们更关心水平位置精度，因此这里只关心水平位置精度即可
         const Eigen::Vector3d& std = cov.diagonal().array().sqrt().transpose();
-        if (std.head(2).norm() > maxMakerPosStd) {
+        if (std.head(2).norm() > maxMakerPosStd && !isInitialized) {
             cout << "std too big, value: " << std.transpose() << endl;
             CullingBadObservationsBeforeInit(slidingWindow);
             continue;
+        }
+
+        double chi2 = 0.;
+        if(isInitialized) {
+            const double square3Sigma = 9;
+            const Eigen::Vector3d posDiff = optPw - priorData.lastPw_;
+            chi2 = posDiff.transpose() * priorData.lastCov_ * posDiff;
+            if(chi2 > square3Sigma) {
+                cout << "update failed for chi2: " << chi2 << endl;
+            }
         }
 
         isInitialized = true;
@@ -345,7 +361,7 @@ int main(int argc, char** argv) {
                slidingWindow.size());
         lastUpdateAccBaseline = accumulateBaseline;
         ++updateTime;
-        PrintReprojectErrorEachFrame(slidingWindow, optPw, K);
+        //PrintReprojectErrorEachFrame(slidingWindow, optPw, K);
 
         // 移除滑动窗口元素
         auto MoveSlidingWindow = [&slidingWindow]() -> void {
@@ -382,6 +398,9 @@ int main(int argc, char** argv) {
         //cout << "initPw: " << initPw.transpose() << endl;
         cout << "optPw: " << optPw.transpose() << endl;
         cout << "std: " << std.transpose() << endl;
+        cout << "chi2: " << to_string(chi2) << endl;
+        priorData.lastPw_ = optPw;
+        priorData.lastCov_ = cov;
         if (std.norm() < 0.1) {
             cout << "converge at accumulateBaseline=" << accumulateBaseline
                  << endl;
@@ -441,14 +460,14 @@ Eigen::Vector3d SolveLandmarkPosition::Optimize() {
     options.minimizer_type = ceres::TRUST_REGION;
     options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT;
     // 设置输出log便于bug排查
-    options.logging_type = ceres::PER_MINIMIZER_ITERATION;  // SILENT;
+    options.logging_type = ceres::SILENT;  // PER_MINIMIZER_ITERATION;
     options.function_tolerance = 1e-12;
     options.inner_iteration_tolerance = 1e-6;
 
 #if RESIDUAL_ON_NORMLIZED_PLANE
-    options.max_num_iterations = 50; // 归一化平面收敛快，可适当减小迭代次数
-    options.gradient_tolerance = 1e-12; // 防止过快终止，适当减小
-    options.function_tolerance = 1e-15; // 适当减小以匹配归一化残差量级
+    options.max_num_iterations = 50;  // 归一化平面收敛快，可适当减小迭代次数
+    options.gradient_tolerance = 1e-12;  // 防止过快终止，适当减小
+    options.function_tolerance = 1e-15;  // 适当减小以匹配归一化残差量级
     options.parameter_tolerance = 1e-10;
 #endif
 

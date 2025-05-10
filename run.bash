@@ -1,4 +1,5 @@
-/home/laijinxiang/edge-slam/calibrate_Tcb_Tvb_with_ceres/build/optimizaLandmarkPosition_no_normlized_obv_in_ceres \
+/home/laijinxiang/edge-slam/calibrate_Tcb_Tvb_with_ceres/build/optimizaLandmarkPosition \
 320 240 \
 3.0 150.0 \
+100 \
 #320 240

@@ -35,6 +35,9 @@ class PriorEstimateData {
     Eigen::Vector3d GetPw() const { return Pw_; }
     Eigen::Matrix3d GetH() const { return H_; }
 
+    Eigen::Vector3d lastPw_ = Eigen::Vector3d(0, 0, 0);
+    Eigen::Matrix3d lastCov_ = Eigen::Matrix3d::Zero();
+
    private:
     Eigen::Vector3d Pw_ = Eigen::Vector3d::Zero();
     Eigen::Matrix3d H_ = Eigen::Matrix3d::Zero();
