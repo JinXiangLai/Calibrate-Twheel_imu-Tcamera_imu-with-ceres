@@ -127,3 +127,7 @@ Eigen::Matrix3d InverseRightJacobianSO3(const Eigen::Vector3d& v);
 void PrintReprojectErrorEachFrame(const std::deque<DataFrame>& sw,
                                   const Eigen::Vector3d& Pw,
                                   const Eigen::Matrix3d& K);
+
+double CalculateChi2Distance(const Eigen::Matrix3d& cov,
+                             const Eigen::Vector3d& pos,
+                             const Eigen::Vector3d& est);

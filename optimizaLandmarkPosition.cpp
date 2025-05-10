@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
     if (argc > 4) {
         depth = atof(argv[4]);
     }
-    if (argc > 5){
+    if (argc > 5) {
         maxUpdateTime = atoi(argv[5]);
     }
     printf("Current parameters:\n\tX0=%d, Y0=%d, radius=%f,  depth=%f\n", X0,
@@ -174,6 +174,11 @@ int main(int argc, char** argv) {
     int updateTime = 0;
     while (updateTime < maxUpdateTime) {
         cout << endl;
+        if (accumulateBaseline > 1000.0) {
+            cerr << "accumulateBaseline too big: " << accumulateBaseline
+                 << " and not converged!" << endl;
+            break;
+        }
         //random_device rd; // 不使用真随机数
         mt19937 gen1(42), gen2(43);
         uniform_real_distribution<double> rd(rotRange.x(), rotRange.y());
@@ -186,11 +191,17 @@ int main(int argc, char** argv) {
         Eigen::Vector3d rotDir(0, 0, md(gen1));  // 主要绕Z轴，不然就翻车了
 
         Eigen::Vector3d posDir(0, 0, 0);
-        if (isInitialized && 0)
+        if (isInitialized && maxUpdateTime % 2 == 1) {
+            static bool firstTime = true;
+            if (firstTime) {
+                //lastPw_c.head(2) << 0., 0.;
+                firstTime = false;
+            }
             posDir = Eigen::Vector3d(md(gen2) * 0.01, md(gen2) * 0.01,
                                      md(gen2));  // 沿任何轴平移均可
-        else
+        } else {
             posDir = Eigen::Vector3d(md(gen2), md(gen2), 0);  // 不沿Z轴
+        }
 
         // 产生下一个位姿
         Eigen::Matrix3d Rw_c2;
@@ -343,12 +354,13 @@ int main(int argc, char** argv) {
         }
 
         double chi2 = 0.;
-        if(isInitialized) {
+        if (isInitialized) {
             const double square3Sigma = 9;
-            const Eigen::Vector3d posDiff = optPw - priorData.lastPw_;
-            chi2 = posDiff.transpose() * priorData.lastCov_ * posDiff;
-            if(chi2 > square3Sigma) {
+            chi2 = CalculateChi2Distance(priorData.lastCov_, priorData.lastPw_,
+                                         optPw);
+            if (chi2 > square3Sigma) {
                 cout << "update failed for chi2: " << chi2 << endl;
+                continue;
             }
         }
 
@@ -482,7 +494,8 @@ bool SolveLandmarkPosition::EstimateCovariance(
     ceres::Covariance::Options options_cov;
     options_cov.null_space_rank = 0;  // 需要截断的最小奇异值数量
     // 最小互反条件数，即条件数的相反数
-    options_cov.min_reciprocal_condition_number = 1e-6;
+    options_cov.min_reciprocal_condition_number =
+        kMinReciprocalConditionNumber;  // 1e-6才不会导致方差增大出现，因为已经被过滤掉
     // 使用SVD分解计算伪逆，虽不要求满秩，但是非常耗时 1.0s+
     options_cov.algorithm_type = ceres::CovarianceAlgorithmType::DENSE_SVD;
     // options_cov.algorithm_type = ceres::CovarianceAlgorithmType::SPARSE_QR;
@@ -562,19 +575,23 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
 
     optPw = slp.Optimize();
 
+#define CalculateCovarianceByCeres 0
+
+#if !CalculateCovarianceByCeres
     const Eigen::Matrix3d& H = CalculateHessianMatrix(slidingWindow, K, optPw);
-    if(CalculateCovariance(H, cov, 1.0)) {
+    if (CalculateCovariance(H, cov, 1.0)) {
         return true;
     } else {
         return false;
     }
-
-    // Eigen::Matrix<double, 3, 3, Eigen::RowMajor> covMatrix;
-    //if (slp.EstimateCovariance(covMatrix)) {
-    //    cov = covMatrix;
-    //    return true;
-    //} else {
-    //    return false;
-    //}
+#else
+    Eigen::Matrix<double, 3, 3, Eigen::RowMajor> covMatrix;
+    if (slp.EstimateCovariance(covMatrix)) {
+        cov = covMatrix;
+        return true;
+    } else {
+        return false;
+    }
     //const Eigen::Vector3d initPw = slp.GetPriorPw(); // 由历史值读取即可
+#endif
 }

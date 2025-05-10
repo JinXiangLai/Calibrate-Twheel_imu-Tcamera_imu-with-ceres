@@ -9,6 +9,10 @@ constexpr int kImgWidth = 640;
 constexpr int kImgHeight = 480;
 constexpr double kSqrt2 = 1.414213562;  // sqrt(2);
 
+// 即条件数的相反数，主要是为了避免除以0，过小意味着协方差可信度低，
+// 原因是最小奇异值很小，使得系统不稳定，易受噪声影响
+constexpr double kMinReciprocalConditionNumber = 1e-10; // 1e-6
+
 // 行优先存入
 // clang-format off
 constexpr double kFx = 400;
