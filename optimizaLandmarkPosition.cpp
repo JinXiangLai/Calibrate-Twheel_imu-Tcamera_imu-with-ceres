@@ -353,6 +353,7 @@ int main(int argc, char** argv) {
             continue;
         }
 
+#define Remove_Unormal_Obv 0
         double chi2 = 0.;
         if (isInitialized) {
             const double square3Sigma = 9;
@@ -360,6 +361,19 @@ int main(int argc, char** argv) {
                                          optPw);
             if (chi2 > square3Sigma) {
                 cout << "update failed for chi2: " << chi2 << endl;
+#if Remove_Unormal_Obv
+                slidingWindow.pop_back();
+#endif
+                continue;
+            }
+
+            if (std.squaredNorm() > priorData.lastCov_.diagonal().norm()) {
+                // 不更新也不删除观测，因为前面已经检查了观测的有效性
+                cout << "update failed for std bigger than last one"
+                     << std.transpose() << endl;
+#if Remove_Unormal_Obv
+                slidingWindow.pop_back();
+#endif
                 continue;
             }
         }
