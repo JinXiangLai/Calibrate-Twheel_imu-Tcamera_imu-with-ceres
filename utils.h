@@ -133,3 +133,8 @@ double CalculateChi2Distance(const Eigen::Matrix3d& cov,
                              const Eigen::Vector3d& est);
 
 Eigen::Vector3d RotationMatrixToZYXEulerAngles(const Eigen::Matrix3d& R);
+
+std::vector<Eigen::Vector3d> GetAllEpipolarLines(
+    const std::deque<DataFrame>& frames, const DataFrame& curF);
+
+double Point2EpipolarLineDist(const Eigen::Vector3d& l, const Eigen::Vector2d& px);

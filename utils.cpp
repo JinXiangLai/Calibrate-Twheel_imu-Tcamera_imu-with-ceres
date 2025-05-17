@@ -52,10 +52,10 @@ Eigen::Matrix<double, 2, 3> CalculateObvWrtPwJacobian(
     return j;
 }
 
-std::vector<Eigen::Vector3d> TransformPw2Pc(
-    const std::vector<Eigen::Matrix3d>& Rc_ws,
-    const std::vector<Eigen::Vector3d>& Pc_ws, const Eigen::Vector3d& Pw) {
-    std::vector<Eigen::Vector3d> Pcs(Rc_ws.size());
+vector<Eigen::Vector3d> TransformPw2Pc(const vector<Eigen::Matrix3d>& Rc_ws,
+                                       const vector<Eigen::Vector3d>& Pc_ws,
+                                       const Eigen::Vector3d& Pw) {
+    vector<Eigen::Vector3d> Pcs(Rc_ws.size());
     for (int i = 0; i < Rc_ws.size(); ++i) {
         Pcs[i] = TransformPw2Pc(Rc_ws[i], Pc_ws[i], Pw);
     }
@@ -525,7 +525,7 @@ bool CheckInitialPwValidity(const vector<Eigen::Matrix3d>& Rc_w,
 vector<int> GetEraseObservationId(const deque<DataFrame>& slidingWindow) {
     //const int midId = slidingWindow.size() / 2;
     const int midId = 0;  // 保留首帧以保证基线长度持续增长
-    std::vector<int> keepIds, removeIds;
+    vector<int> keepIds, removeIds;
     keepIds.push_back(midId);
 
     int frameId = -1;
@@ -691,7 +691,7 @@ Eigen::Matrix3d InverseRightJacobianSO3(const Eigen::Vector3d& v) {
     return InverseRightJacobianSO3(v[0], v[1], v[2]);
 }
 
-void PrintReprojectErrorEachFrame(const std::deque<DataFrame>& sw,
+void PrintReprojectErrorEachFrame(const deque<DataFrame>& sw,
                                   const Eigen::Vector3d& Pw,
                                   const Eigen::Matrix3d& K) {
     cout << "each frame obv residual(pixels) in Pw: " << Pw.transpose() << endl;
@@ -709,9 +709,9 @@ void PrintReprojectErrorEachFrame(const std::deque<DataFrame>& sw,
     cout << endl;
 }
 
-Eigen::Matrix3d CalculateHessianMatrix(
-    const std::deque<DataFrame>& slidingWindow, const Eigen::Matrix3d& K,
-    const Eigen::Vector3d& Pw) {
+Eigen::Matrix3d CalculateHessianMatrix(const deque<DataFrame>& slidingWindow,
+                                       const Eigen::Matrix3d& K,
+                                       const Eigen::Vector3d& Pw) {
 
 #define USE_ALL_OBV 1
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
@@ -775,7 +775,7 @@ Eigen::Vector3d RotationMatrixToZYXEulerAngles(const Eigen::Matrix3d& R) {
 
     // 避免万向节锁（Gimbal Lock）时的数值误差
     const double eps = 1e-6;
-    if (std::abs(R(2, 0)) < 1.0 - eps) {
+    if (abs(R(2, 0)) < 1.0 - eps) {
         // 常规情况
         euler_angles[0] = atan2(R(2, 1), R(2, 2));  // phi = atan2(r32, r33)
         euler_angles[2] = atan2(R(1, 0), R(0, 0));  // psi = atan2(r21, r11)
@@ -786,4 +786,35 @@ Eigen::Vector3d RotationMatrixToZYXEulerAngles(const Eigen::Matrix3d& R) {
     }
 
     return euler_angles;
+}
+
+vector<Eigen::Vector3d> GetAllEpipolarLines(const deque<DataFrame>& frames,
+                                            const DataFrame& curF) {
+
+    vector<Eigen::Vector3d> l2s;
+    for (int i = 0; i < frames.size(); ++i) {
+        const DataFrame& f = frames[i];
+        const Eigen::Matrix3d R21 = curF.Rc_w * f.Rc_w.transpose();
+        const Eigen::Vector3d P21 = curF.Rc_w * (f.GetPw() - curF.GetPw());
+        const Eigen::Vector3d px1(f.obv[0].x(), f.obv[0].y(), 1);
+        const Eigen::Vector3d l2 =
+            invK.transpose() * skew(P21) * R21 * invK * px1;
+        if(abs(l2.x()) < 1e-10 && abs(l2.y()) < 1e-10) {
+            // 非直线
+            cerr << "l2: " << l2.transpose() << " Not a line!" << endl;
+            continue;
+        }
+        l2s.push_back(l2);
+    }
+    return l2s;
+}
+
+double Point2EpipolarLineDist(const Eigen::Vector3d& l,
+                              const Eigen::Vector2d& px) {
+    if (l.x() < 1e-10 && l.y() < 1e-10) {
+        // 直线不存在
+        return DBL_MAX;
+    }
+    const double A = l.x(), B = l.y(), C = l.z();
+    return abs(A * px.x() + B * px.y() + C) / sqrt(A * A + B * B);
 }

@@ -17,6 +17,9 @@ const double noiseStdNorm = kRatio * noiseStd;
 const double noiseStdNorm2 = noiseStdNorm * noiseStdNorm;
 #endif
 
+// 观测位于飞机正下方的条件
+const double kDegradePixelRadius = 0.5 * 0.01 * (kFx + kFy);
+
 constexpr double INF = 1e12;
 constexpr int ceresMaxIterativeTime = 1000;
 
@@ -65,6 +68,11 @@ bool SlidingWindowSolvedByCeres(const std::deque<DataFrame>& slidingWindow,
                                 const int updateTime, Eigen::Vector3d& optPw,
                                 Eigen::Matrix3d& cov);
 
+bool PositionConvergeWhenInitialized(const std::deque<DataFrame>& slidingWindow,
+                                     const Eigen::Matrix3d& K,
+                                     Eigen::Vector3d& optPw,
+                                     Eigen::Matrix3d& cov);
+
 int main(int argc, char** argv) {
     //constexpr int X0 = 220, Y0 = 200; // 这个可能导致位置差异太大，导致无法收敛？测试显示并不是，那是为啥呢？
     // 原因应该是X、Y值差异过小，但又是为什么要这样呢？它们相对位置都差不多啊？
@@ -86,8 +94,8 @@ int main(int argc, char** argv) {
     // 设置一个在首个相机系下的深度
     double depth = 50.0;  // 认为是对地高度
     int maxUpdateTime = 10;
-    printf("Default parameters:\n\tX0=%d, Y0=%d, radius=%f, depth=%f\n", X0, Y0,
-           radius, depth);
+    printf("Default parameters:\n\tX0=%d, Y0=%d, radius=%f, depth=%f, kDegradePixelRadius=%f\n", X0, Y0,
+           radius, depth, kDegradePixelRadius);
     if (argc > 2) {
         X0 = atoi(argv[1]);
         Y0 = atoi(argv[2]);
@@ -101,7 +109,7 @@ int main(int argc, char** argv) {
     if (argc > 5) {
         maxUpdateTime = atoi(argv[5]);
     }
-    printf("Current parameters:\n\tX0=%d, Y0=%d, radius=%f,  depth=%f\n", X0,
+    printf("Current parameters:\n\tX0=%d, Y0=%d, radius=%f,  depth=%f, \n", X0,
            Y0, radius, depth);
 
 #if RESIDUAL_ON_NORMLIZED_PLANE
@@ -173,7 +181,7 @@ int main(int argc, char** argv) {
 
     int updateTime = 0;
     while (updateTime < maxUpdateTime) {
-        cout << endl;
+        // cout << endl;
         if (accumulateBaseline > 1000.0) {
             cerr << "accumulateBaseline too big: " << accumulateBaseline
                  << " and not converged!" << endl;
@@ -219,7 +227,7 @@ int main(int argc, char** argv) {
         lastRw_c = Rw_c2;
         lastPw_c = Pw_c2;
 
-        cout << "current accumulateBaseline: " << accumulateBaseline << endl;
+        // cout << "current accumulateBaseline: " << accumulateBaseline << endl;
 
         // 计算投影观测，并产生一帧DataFrame
         vector<Eigen::Vector2d> obvEachFrame;
@@ -258,8 +266,9 @@ int main(int argc, char** argv) {
         }
 
         // 位姿添加到滑窗
-        DataFrame frame(Rw_c2.transpose(), Rw_c2.transpose() * -Pw_c2, depth,
-                        obvEachFrame, double(updateTime), debugImg);
+        DataFrame frame(Rw_c2.transpose(), Rw_c2.transpose() * -Pw_c2,
+                        depth - Pw_c2.z(), obvEachFrame, double(updateTime),
+                        debugImg);
         slidingWindow.push_back(frame);
 
         // 不能使用编号，因为sw窗口大小固定
@@ -286,6 +295,13 @@ int main(int argc, char** argv) {
         Eigen::Matrix3d cov = Eigen::Matrix3d::Constant(INF);
 
         if (!isInitialized) {
+
+            if (PositionConvergeWhenInitialized(slidingWindow, K, optPw, cov)) {
+                cout << "optPw by relative height: " << optPw.transpose()
+                     << endl;
+                return 0;
+            }
+
             constexpr double maxConditionNumber = 10;
             Eigen::Vector4d singularValues{0, 0, 0, 0};
             CalculateInitialPwDLT(slidingWindow, K, priorPw, singularValues);
@@ -353,15 +369,16 @@ int main(int argc, char** argv) {
             continue;
         }
 
-#define Remove_Unormal_Obv 0
+#define Delete_Abnormal_Obv 1
         double chi2 = 0.;
         if (isInitialized) {
-            const double square3Sigma = 9;
+            const double square2Sigma = 4;
             chi2 = CalculateChi2Distance(priorData.lastCov_, priorData.lastPw_,
                                          optPw);
-            if (chi2 > square3Sigma) {
-                cout << "update failed for chi2: " << chi2 << endl;
-#if Remove_Unormal_Obv
+            if (chi2 > square2Sigma) {
+                cout << "update failed for chi2: " << chi2 << endl
+                     << "cur opt Pw: " << optPw.transpose() << endl;
+#if Delete_Abnormal_Obv
                 slidingWindow.pop_back();
 #endif
                 continue;
@@ -369,9 +386,10 @@ int main(int argc, char** argv) {
 
             if (std.squaredNorm() > priorData.lastCov_.diagonal().norm()) {
                 // 不更新也不删除观测，因为前面已经检查了观测的有效性
-                cout << "update failed for std bigger than last one"
-                     << std.transpose() << endl;
-#if Remove_Unormal_Obv
+                cout << "update failed for std bigger than last one: "
+                     << std.transpose() << endl
+                     << "cur opt Pw: " << optPw.transpose() << endl;
+#if Delete_Abnormal_Obv
                 slidingWindow.pop_back();
 #endif
                 continue;
@@ -608,4 +626,40 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
     }
     //const Eigen::Vector3d initPw = slp.GetPriorPw(); // 由历史值读取即可
 #endif
+}
+
+bool PositionConvergeWhenInitialized(const std::deque<DataFrame>& slidingWindow,
+                                     const Eigen::Matrix3d& K,
+                                     Eigen::Vector3d& optPw,
+                                     Eigen::Matrix3d& cov) {
+    const double &cx = K(0, 2), cy = K(1, 2), fx = K(0, 0), fy = K(1, 1);
+    const double invFx = 1 / fx, invFy = 1 / fy;
+    double sumPixelNorm = 0.;
+    for (int i = 0; i < slidingWindow.size(); ++i) {
+        const Eigen::Vector2d& obv = slidingWindow[i].obv[0];
+        const Eigen::Vector2d diff(obv.x() - cx, obv.y() - cy);
+        sumPixelNorm += diff.norm();
+    }
+    sumPixelNorm /= slidingWindow.size();
+
+    if (sumPixelNorm < kDegradePixelRadius) {
+        // TODO: 对地高计算(X, Y, Z)
+        Eigen::Vector3d sumPw(0, 0, 0);
+        for (int i = 0; i < slidingWindow.size(); ++i) {
+            const DataFrame& f = slidingWindow[i];
+            const Eigen::Vector2d& o = f.obv[0];
+            const Eigen::Vector3d Pn((o.x() - cx) * invFx, (o.y() - cy) * invFy,
+                                     1);
+            const double zc = f.height2Ground;
+            const Eigen::Vector3d Pc = Pn * zc;
+            sumPw += f.Rc_w.transpose() * (Pc - f.Pc_w);
+        }
+        optPw = sumPw / slidingWindow.size();
+        cov.setIdentity();
+        cov.diagonal() << 0.1, 0.1, 0.1;
+        return true;
+
+    } else {
+        return false;
+    }
 }
