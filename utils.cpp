@@ -69,9 +69,8 @@ void GenerateNextPose(const Eigen::Matrix3d& Rw_c1,
                       const double& moveDist, Eigen::Matrix3d& Rw_c2,
                       Eigen::Vector3d& Pw_c2, const bool isDeg) {
     const double rad = isDeg ? rotAng * kDeg2Rad : rotAng;
-    const Eigen::Matrix3d& Rc1_c2 =
-        Eigen::AngleAxisd(rad, rotAxis.normalized()).toRotationMatrix();
-    Rw_c2 = Rw_c1 * Rc1_c2;
+    Rw_c2 = Eigen::AngleAxisd(rad, rotAxis.normalized()).toRotationMatrix();
+    //Rw_c2 = Rw_c1 * Rc1_c2;
     const Eigen::Vector3d Pc1_c2 = moveDist * posDirection.normalized();
     Pw_c2 = Rw_c1 * Pc1_c2 + Pw_c1;
 }
@@ -766,4 +765,25 @@ double CalculateChi2Distance(const Eigen::Matrix3d& cov,
     const Eigen::Vector3d& diff = est - pos;
     const Eigen::Matrix3d& m = cov.inverse();
     return diff.transpose() * m * diff;
+}
+
+Eigen::Vector3d RotationMatrixToZYXEulerAngles(const Eigen::Matrix3d& R) {
+    Eigen::Vector3d euler_angles;
+
+    // 计算俯仰角 theta (绕Y轴)
+    euler_angles[1] = asin(-R(2, 0));  // theta = asin(-r31)
+
+    // 避免万向节锁（Gimbal Lock）时的数值误差
+    const double eps = 1e-6;
+    if (std::abs(R(2, 0)) < 1.0 - eps) {
+        // 常规情况
+        euler_angles[0] = atan2(R(2, 1), R(2, 2));  // phi = atan2(r32, r33)
+        euler_angles[2] = atan2(R(1, 0), R(0, 0));  // psi = atan2(r21, r11)
+    } else {
+        // 万向节锁情况（cos(theta) ≈ 0）
+        euler_angles[0] = 0.0;                       // 任意选择 phi
+        euler_angles[2] = atan2(-R(0, 1), R(1, 1));  // psi = atan2(-r12, r22)
+    }
+
+    return euler_angles;
 }

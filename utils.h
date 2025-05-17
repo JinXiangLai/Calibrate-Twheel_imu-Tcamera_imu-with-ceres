@@ -131,3 +131,5 @@ void PrintReprojectErrorEachFrame(const std::deque<DataFrame>& sw,
 double CalculateChi2Distance(const Eigen::Matrix3d& cov,
                              const Eigen::Vector3d& pos,
                              const Eigen::Vector3d& est);
+
+Eigen::Vector3d RotationMatrixToZYXEulerAngles(const Eigen::Matrix3d& R);
