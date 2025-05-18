@@ -799,7 +799,7 @@ vector<Eigen::Vector3d> GetAllEpipolarLines(const deque<DataFrame>& frames,
         const Eigen::Vector3d px1(f.obv[0].x(), f.obv[0].y(), 1);
         const Eigen::Vector3d l2 =
             invK.transpose() * skew(P21) * R21 * invK * px1;
-        if(abs(l2.x()) < 1e-10 && abs(l2.y()) < 1e-10) {
+        if (abs(l2.x()) < 1e-10 && abs(l2.y()) < 1e-10) {
             // 非直线
             cerr << "l2: " << l2.transpose() << " Not a line!" << endl;
             continue;
@@ -817,4 +817,30 @@ double Point2EpipolarLineDist(const Eigen::Vector3d& l,
     }
     const double A = l.x(), B = l.y(), C = l.z();
     return abs(A * px.x() + B * px.y() + C) / sqrt(A * A + B * B);
+}
+
+Eigen::Vector2d PredictObvByTransform(const DataFrame& f1, const DataFrame& f2,
+                                      const double& s1) {
+    //const double s1 = 50;  // 假设地图点在f1相机系下的深度
+    const Eigen::Vector3d Pn1 =
+        invK * Eigen::Vector3d(f1.obv[0].x(), f1.obv[0].y(), 1);
+    const Eigen::Matrix3d R21 = f2.Rc_w * f1.Rc_w.transpose();
+    const Eigen::Vector3d P21 = f2.Rc_w * (f1.GetPw() - f2.GetPw());
+
+    // 难点是这里的z2作为分母很难再分离了
+    const Eigen::Vector3d Pc2 = R21 * s1 * Pn1 + P21;
+    const double z2 = Pc2.z();
+    const Eigen::Vector3d rotPartPn2 = R21 * s1 * Pn1 / z2;
+    const Eigen::Vector3d transPartPn2 = P21 / z2;
+
+    const Eigen::Vector2d obvRot = K.block(0, 0, 2, 3) * rotPartPn2;
+    const Eigen::Vector2d obvTrans = K.block(0, 0, 2, 3) * transPartPn2;
+    const Eigen::Vector2d predictObv = obvRot + obvTrans;
+
+    cout << "true obv2: " << f2.obv[0].transpose() << endl
+         << "pred rot obv: " << obvRot.transpose() << endl
+         << "pred trans obv: " << obvTrans.transpose() << endl
+         << "predictObv: " << predictObv.transpose() << endl;
+
+    return predictObv;
 }

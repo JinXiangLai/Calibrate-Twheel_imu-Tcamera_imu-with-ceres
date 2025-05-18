@@ -118,6 +118,10 @@ int main(int argc, char** argv) {
              << "lastPwc: " << lastPw_c.transpose() << "\nlastRwc: "
              << RotationMatrixToZYXEulerAngles(lastRw_c).transpose() * kRad2Deg
              << endl;
+        // 1. 使用 {0, 0.01, 0}+{0, 0, 0}验证了微小位移可以引起极大的极线方向变化
+        // 2. 使用 {0, 0.1, 0} +{0, 0, 30}验证了极线会随着旋转，这是由于图像感光芯片发生了旋转，
+        // 虽然真实的极线没有旋转，但是它在成像时，与感光芯片的X轴有了夹角
+        // 3. 本质上，极线就是相机C1与地图点Pw连线在相机C2上的投影
         cout << "Please input " << updateTime << "th Pc1_c2: ";
         Eigen::Vector3d Pc1_c2(0, 0, 0);
         cin >> Pc1_c2[0] >> Pc1_c2[1] >> Pc1_c2[2];
@@ -126,7 +130,10 @@ int main(int argc, char** argv) {
         Eigen::Vector3d rpy(0, 0, 0);
         cin >> rpy[0] >> rpy[1] >> rpy[2];
         cout << "Get rpy: " << rpy.transpose() << endl;
-
+        cout << "please input predict s1: ";
+        double s1 = 0;
+        cin >> s1;
+        cout << "Get s1: " << s1 << endl;
 
         // 产生下一个位姿
         Eigen::Matrix3d Rw_c2 = RPY2Rotation(rpy);
@@ -139,6 +146,9 @@ int main(int argc, char** argv) {
 
         // 注意，当前辅助进近还不需要做的现在的思路这么复杂
         DataFrame curFrame = ProjectPws2CurFrame(Rw_c2, Pw_c2, updateTime);
+
+        const Eigen::Vector2d predictObv =
+            PredictObvByTransform(historyFrame.back(), curFrame, s1);
 
         // 进行极线跟踪，判断特征点1在该图像位置，这个工作量最大
         vector<Eigen::Vector3d> l2s =
@@ -170,7 +180,6 @@ int main(int argc, char** argv) {
                 cout << "pl: " << pl << endl << "pr: " << pr << endl;
                 //cv::line(img, {int(pl.x), int(pl.y)}, {int(pr.x), int(pr.y)}, {255, 255, 255}, 1);
                 cv::line(img, pl, pr, {255, 255, 255}, 1);
-
             }
         }
         const vector<Eigen::Vector2d>& obvs = curFrame.obv;
@@ -178,6 +187,8 @@ int main(int argc, char** argv) {
                    cv::Scalar(0, 255, 0), -1);
         cv::circle(img, cv::Point2i(obvs[1].x(), obvs[1].y()), 1, {0, 0, 255},
                    -1);
+        cv::circle(img, cv::Point2i(predictObv.x(), predictObv.y()), 2,
+                   {0, 255, 255}, -1);
         cv::imshow("img", img);
         cv::waitKey();
 #endif
@@ -186,7 +197,6 @@ int main(int argc, char** argv) {
         if (Pc1_c2.norm() >= 0.1) {
             historyFrame.push_back(curFrame);
         }
-
     }
 
     return 0;

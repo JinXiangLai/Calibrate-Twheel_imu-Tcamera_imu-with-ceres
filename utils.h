@@ -138,3 +138,5 @@ std::vector<Eigen::Vector3d> GetAllEpipolarLines(
     const std::deque<DataFrame>& frames, const DataFrame& curF);
 
 double Point2EpipolarLineDist(const Eigen::Vector3d& l, const Eigen::Vector2d& px);
+
+Eigen::Vector2d PredictObvByTransform(const DataFrame& f1, const DataFrame& f2, const double& s1 = 20.0);
