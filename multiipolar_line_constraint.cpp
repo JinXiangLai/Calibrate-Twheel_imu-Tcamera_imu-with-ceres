@@ -68,18 +68,7 @@ int main(int argc, char** argv) {
             Eigen::Vector2d _obv = ProjectPw2Pixel(Pw, Rc_w, Pc_w, K);
             _obv[0] = int(_obv[0]);
             _obv[1] = int(_obv[1]);
-
-            mt19937 gen(44);
-            normal_distribution<double> dist(0.0, noiseStd);
-            const Eigen::Vector2d noise{int(dist(gen)), int(dist(gen))};
-            const Eigen::Vector2d _obv_noisy = _obv + noise;
-            // TODO: 暂时不考虑噪声
-            if (j != 0 && 0) {
-                obvEachFrame.push_back(_obv_noisy);
-            } else {
-                obvEachFrame.push_back(_obv);
-            }
-
+            obvEachFrame.push_back(_obv);
             cv::circle(debugImg, cv::Point2i(_obv[0], _obv[1]), 1,
                        cv::Scalar(0, 255, 0), -1);
             //cv::circle(debugImg, cv::Point2i(_obv_noisy[0], _obv_noisy[1]), 1,
@@ -89,6 +78,14 @@ int main(int argc, char** argv) {
         //cv::waitKey();
         return DataFrame(Rc_w, Pc_w, depth - Pwc.z(), obvEachFrame, time,
                          debugImg);
+    };
+
+    auto AddNoise2Obv = [](const Eigen::Vector2d& obv) -> Eigen::Vector2d {
+        mt19937 gen(44);
+        normal_distribution<double> dist(0.0, noiseStd);
+        const Eigen::Vector2d noise{int(dist(gen)), int(dist(gen))};
+        const Eigen::Vector2d obv_noisy = obv + noise;
+        return obv_noisy;
     };
 
     // 初始化世界系的位置
@@ -149,6 +146,27 @@ int main(int argc, char** argv) {
 
         const Eigen::Vector2d predictObv =
             PredictObvByTransform(historyFrame.back(), curFrame, s1);
+
+        if (Pc1_c2.norm() < 0.2) {
+            // 使用纯旋转估计误差
+            const Eigen::Vector2d est2 =
+                PredictObvByRotation(historyFrame.back(), curFrame);
+            cout << "obv diff by pure rot obv: diff1: "
+                 << (est2 - curFrame.obv[0]).norm()
+                 << " diff2: " << (est2 - curFrame.obv[1]).norm() << endl;
+        } else {
+            const DataFrame &f1 = historyFrame.back(), f2 = curFrame;
+            // 使用三角化观测残差
+            vector<Eigen::Vector2d> est1 =
+                CheckReprojectResidual(f1, f1.obv[0], f2, f2.obv[0]);
+            // 故意使用误匹配的进行三角化
+            vector<Eigen::Vector2d> est2 =
+                CheckReprojectResidual(f1, f1.obv[0], f2, f2.obv[1]);
+
+            cout << "Add noise result: " << endl;
+            CheckReprojectResidual(f1, AddNoise2Obv(f1.obv[0]), f2, AddNoise2Obv(f2.obv[0]));
+
+        }
 
         // 进行极线跟踪，判断特征点1在该图像位置，这个工作量最大
         vector<Eigen::Vector3d> l2s =

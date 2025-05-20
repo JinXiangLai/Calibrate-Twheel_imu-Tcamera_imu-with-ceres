@@ -19,7 +19,7 @@ Eigen::Vector3d TransformPw2Pc(const Eigen::Matrix3d& Rc_w,
     return Pc;
 }
 
-Eigen::Vector2d ProjectPc2PixelPlane(const Eigen::Vector3d& K,
+Eigen::Vector2d ProjectPc2PixelPlane(const Eigen::Matrix3d& K,
                                      const Eigen::Vector3d& Pc) {
     const Eigen::Matrix<double, 3, 1> Pn = Pc / Pc[2];
     const Eigen::Matrix<double, 2, 1> obv = K.block(0, 0, 2, 3) * Pn;
@@ -28,7 +28,7 @@ Eigen::Vector2d ProjectPc2PixelPlane(const Eigen::Vector3d& K,
 
 Eigen::Vector2d ProjectPw2PixelPlane(const Eigen::Matrix3d& Rc_w,
                                      const Eigen::Vector3d& Pc_w,
-                                     const Eigen::Vector3d& K,
+                                     const Eigen::Matrix3d& K,
                                      const Eigen::Vector3d& Pw) {
     const Eigen::Vector3d& Pc = TransformPw2Pc(Rc_w, Pc_w, Pw);
     const Eigen::Vector2d& obv = ProjectPc2PixelPlane(K, Pc);
@@ -107,7 +107,6 @@ Eigen::Vector3d EstimatePwInitialValue(
         // 因此需要加一个先验判断
         // 但是也存在着这里解算不准的情况，因此需要加一个由对地高度直接解算位置的先验
         return -estPw;
-        ;
     }
     return estPw;
 }
@@ -837,10 +836,58 @@ Eigen::Vector2d PredictObvByTransform(const DataFrame& f1, const DataFrame& f2,
     const Eigen::Vector2d obvTrans = K.block(0, 0, 2, 3) * transPartPn2;
     const Eigen::Vector2d predictObv = obvRot + obvTrans;
 
-    cout << "true obv2: " << f2.obv[0].transpose() << endl
+    cout << "/******\ntrue obv2: " << f2.obv[0].transpose() << endl
          << "pred rot obv: " << obvRot.transpose() << endl
          << "pred trans obv: " << obvTrans.transpose() << endl
-         << "predictObv: " << predictObv.transpose() << endl;
+         << "predictObv: " << predictObv.transpose() << endl
+         << " obv diff: " << (f2.obv[0] - predictObv).norm() << "\n******"
+         << endl;
+    ;
 
     return predictObv;
+}
+
+Eigen::Vector2d PredictObvByRotation(const DataFrame& f1, const DataFrame& f2) {
+    // 当位移小于0.1时，我们使用该函数来预测obv位置，以应对退化场景
+    const Eigen::Vector3d Pn1 =
+        invK * Eigen::Vector3d(f1.obv[0].x(), f1.obv[0].y(), 1);
+    const Eigen::Matrix3d R21 = f2.Rc_w * f1.Rc_w.transpose();
+    const Eigen::Vector3d Pn2 = R21 * Pn1;
+    const Eigen::Vector2d predictObv = K.block(0, 0, 2, 3) * Pn2;
+    cout << "predictObv by pure rot: " << predictObv.transpose() << endl;
+    return predictObv;
+}
+
+vector<Eigen::Vector2d> CheckReprojectResidual(const DataFrame& f1,
+                                               const Eigen::Vector2d& obv1,
+                                               const DataFrame& f2,
+                                               const Eigen::Vector2d& obv2) {
+    vector<Eigen::Matrix3d> Rcw = {f1.Rc_w, f2.Rc_w};
+    vector<Eigen::Vector3d> Pcw = {f1.Pc_w, f2.Pc_w};
+    vector<vector<Eigen::Vector3d>> obvsNorm;
+
+    // 需把变量转到归一化平面上reset
+    obvsNorm.push_back({Eigen::Vector3d(obv1.x(), obv1.y(), 1.0)});
+    obvsNorm.push_back({Eigen::Vector3d(obv2.x(), obv2.y(), 1.0)});
+    for (auto& obvs : obvsNorm) {
+        for (Eigen::Vector3d& obv : obvs) {
+            obv = invK * obv;
+        }
+    }
+
+    Eigen::Vector4d singularValues(0, 0, 0, 0);
+    const Eigen::Vector3d Pw = EstimatePwInitialValueOnNormPlane(
+        Rcw, Pcw, obvsNorm, K, singularValues);
+    cout << "Est Pw: " << Pw.transpose() << endl;
+    cout << "singularValues: " << singularValues.transpose() << endl;
+
+    const Eigen::Vector2d est1 = ProjectPw2PixelPlane(f1.Rc_w, f1.Pc_w, K, Pw);
+    cout << "est1: " << est1.transpose() << endl;
+    const Eigen::Vector2d est2 = ProjectPw2PixelPlane(f2.Rc_w, f2.Pc_w, K, Pw);
+    cout << "est2: " << est2.transpose() << endl;
+
+    cout << "project residual 1: " << (obv1 - est1).norm() << endl;
+    cout << "project residual 2: " << (obv2 - est2).norm() << endl;
+
+    return {est1, est2};
 }

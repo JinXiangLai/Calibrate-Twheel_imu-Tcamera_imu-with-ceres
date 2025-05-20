@@ -20,12 +20,12 @@ Eigen::Vector3d TransformPw2Pc(const Eigen::Matrix3d& Rc_w,
                                const Eigen::Vector3d& Pc_w,
                                const Eigen::Vector3d& Pw);
 
-Eigen::Vector2d ProjectPc2PixelPlane(const Eigen::Vector3d& K,
+Eigen::Vector2d ProjectPc2PixelPlane(const Eigen::Matrix3d& K,
                                      const Eigen::Vector3d& Pc);
 
 Eigen::Vector2d ProjectPw2PixelPlane(const Eigen::Matrix3d& Rc_w,
                                      const Eigen::Vector3d& Pc_w,
-                                     const Eigen::Vector3d& K,
+                                     const Eigen::Matrix3d& K,
                                      const Eigen::Vector3d& Pw);
 
 Eigen::Matrix<double, 2, 3> CalculateObvWrtPwJacobian(
@@ -137,6 +137,15 @@ Eigen::Vector3d RotationMatrixToZYXEulerAngles(const Eigen::Matrix3d& R);
 std::vector<Eigen::Vector3d> GetAllEpipolarLines(
     const std::deque<DataFrame>& frames, const DataFrame& curF);
 
-double Point2EpipolarLineDist(const Eigen::Vector3d& l, const Eigen::Vector2d& px);
+double Point2EpipolarLineDist(const Eigen::Vector3d& l,
+                              const Eigen::Vector2d& px);
 
-Eigen::Vector2d PredictObvByTransform(const DataFrame& f1, const DataFrame& f2, const double& s1 = 20.0);
+Eigen::Vector2d PredictObvByTransform(const DataFrame& f1, const DataFrame& f2,
+                                      const double& s1 = 20.0);
+
+Eigen::Vector2d PredictObvByRotation(const DataFrame& f1, const DataFrame& f2);
+
+std::vector<Eigen::Vector2d> CheckReprojectResidual(const DataFrame& f1,
+                                               const Eigen::Vector2d& obv1,
+                                               const DataFrame& f2,
+                                               const Eigen::Vector2d& obv2);
