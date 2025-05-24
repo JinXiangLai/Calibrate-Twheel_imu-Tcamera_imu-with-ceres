@@ -92,6 +92,9 @@ struct InverseDepthFilter {
                                const double& obsNoisepixel,
                                const double& baseline);
 
+    // 第一次计算，后续ρ1已知可按EKF方法估计
+    bool UpdateInverseDepth(const FrameData& curF, const Eigen::Matrix3d& invK);
+
     // 坐标系变换（带协方差传播）
     bool TransformHost(const FrameData& curF, const Eigen::Matrix3d& invK);
 

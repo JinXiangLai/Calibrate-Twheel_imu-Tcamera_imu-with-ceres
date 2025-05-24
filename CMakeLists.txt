@@ -51,3 +51,4 @@ add_executable(larndmark_radius_to_evaluate_depth larndmark_radius_to_evaluate_d
 add_executable(optimizaLandmarkPosition optimizaLandmarkPosition.cpp)
 add_executable(degerate_coefficient_matrix degerate_coefficient_matrix.cpp)
 add_executable(multiipolar_line_constraint multiipolar_line_constraint.cpp)
+add_executable(inverse_depth_filter inverse_depth_filter.cpp)

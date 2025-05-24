@@ -132,10 +132,6 @@ int main(int argc, char** argv) {
         Eigen::Vector3d rpy(0, 0, 0);
         cin >> rpy[0] >> rpy[1] >> rpy[2];
         cout << "Get rpy: " << rpy.transpose() << endl;
-        cout << "please input predict s1: ";
-        double s1 = 0;
-        cin >> s1;
-        cout << "Get s1: " << s1 << endl;
 
         // 产生下一个位姿
         Eigen::Matrix3d Rw_c2 = RPY2Rotation(rpy);
@@ -148,33 +144,6 @@ int main(int argc, char** argv) {
 
         // 注意，当前辅助进近还不需要做的现在的思路这么复杂
         FrameData curFrame = ProjectPws2CurFrame(Rw_c2, Pw_c2, updateTime);
-
-        const Eigen::Vector2d predictObv =
-            PredictObvByTransform(historyFrame.back(), curFrame, s1);
-
-        if (Pc1_c2.norm() < 0.2) {
-            // 使用纯旋转估计误差
-            const Eigen::Vector2d est2 =
-                PredictObvByRotation(historyFrame.back(), curFrame);
-            cout << "obv diff by pure rot obv: diff1: "
-                 << (est2 - curFrame.obv[0]).norm()
-                 << " diff2: " << (est2 - curFrame.obv[1]).norm() << endl;
-        } else {
-            const FrameData &f1 = historyFrame.back(), f2 = curFrame;
-            // 使用三角化观测残差
-            cout << "Correct match pair resutl: " << endl;
-            cout << "true obv[0]: " << f1.obv[0].transpose() << endl;
-            vector<Eigen::Vector2d> est1 =
-                CheckReprojectResidual(f1, f1.obv[0], f2, f2.obv[0]);
-            // 故意使用误匹配的进行三角化
-            cout << "Wrong match pair resutl: " << endl;
-            vector<Eigen::Vector2d> est2 =
-                CheckReprojectResidual(f1, f1.obv[0], f2, f2.obv[1]);
-
-            cout << "Add noise result: " << endl;
-            CheckReprojectResidual(f1, AddNoise2Obv(f1.obv[0]), f2, f2.obv[0]);
-
-        }
 
         // 进行极线跟踪，判断特征点1在该图像位置，这个工作量最大
         vector<Eigen::Vector3d> l2s =
@@ -215,8 +184,6 @@ int main(int argc, char** argv) {
                    cv::Scalar(0, 255, 0), -1);
         cv::circle(img, cv::Point2i(obvs[1].x(), obvs[1].y()), 1, {0, 0, 255},
                    -1);
-        cv::circle(img, cv::Point2i(predictObv.x(), predictObv.y()), 2,
-                   {0, 255, 255}, -1);
         cv::imshow("img", img);
         cv::waitKey();
 #endif
