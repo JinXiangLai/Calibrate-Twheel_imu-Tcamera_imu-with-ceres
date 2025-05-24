@@ -287,16 +287,16 @@ Eigen::Vector3d EstimatePwInitialValueOnNormPlane(
     const Eigen::Vector4d bestV = svd.matrixV().col(singularValues.size() - 1);
     cout << "singularValues normlized: " << singularValues.transpose() << endl;
     Eigen::Vector3d estNormPw = bestV.head(3) / bestV[3];
-    cout << "src estNormPw: " << estNormPw.transpose() << endl;
+    //cout << "src estNormPw: " << estNormPw.transpose() << endl;
     if (estNormPw.z() < 0) {
         estNormPw *= -1.0;
     }
-    cout << "tar estNormPw: " << estNormPw.transpose() << endl;
+    //cout << "tar estNormPw: " << estNormPw.transpose() << endl;
 
     //const Eigen::Vector3d& estPw = A33.colPivHouseholderQr().solve(b);
     const Eigen::Vector3d& estPw = A33.fullPivHouseholderQr().solve(b);
 
-    cout << "QR estPw 不含尺度: " << estPw.transpose() << endl;
+    //cout << "QR estPw 不含尺度: " << estPw.transpose() << endl;
 
     return estNormPw;
     //return estPw;
@@ -879,7 +879,7 @@ vector<Eigen::Vector2d> CheckReprojectResidual(const DataFrame& f1,
     const Eigen::Vector3d Pw = EstimatePwInitialValueOnNormPlane(
         Rcw, Pcw, obvsNorm, K, singularValues);
     cout << "Est Pw: " << Pw.transpose() << endl;
-    cout << "singularValues: " << singularValues.transpose() << endl;
+    //cout << "singularValues: " << singularValues.transpose() << endl;
 
     const Eigen::Vector2d est1 = ProjectPw2PixelPlane(f1.Rc_w, f1.Pc_w, K, Pw);
     cout << "est1: " << est1.transpose() << endl;

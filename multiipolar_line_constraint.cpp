@@ -43,9 +43,10 @@ int main(int argc, char** argv) {
 
     // 初始化两个一模一样的marker点
     // clang-format off
+    double startX = 10, startY = 11;
     Eigen::Matrix<double, 3, kMarkerNum> Pws = 
-        (Eigen::Matrix<double, 3, kMarkerNum>() << 0, distX,
-                                                   0, 0,
+        (Eigen::Matrix<double, 3, kMarkerNum>() << startX, startX + distX,
+                                                   startY, startY,
                                                    depth, depth).finished();
     // clang-format on
     cout << "Pws:\n" << Pws << endl;
@@ -82,8 +83,9 @@ int main(int argc, char** argv) {
 
     auto AddNoise2Obv = [](const Eigen::Vector2d& obv) -> Eigen::Vector2d {
         mt19937 gen(44);
+        const double minNoise = 15.0;
         normal_distribution<double> dist(0.0, noiseStd);
-        const Eigen::Vector2d noise{int(dist(gen)), int(dist(gen))};
+        const Eigen::Vector2d noise{dist(gen)+minNoise, dist(gen)+minNoise*0.1};
         const Eigen::Vector2d obv_noisy = obv + noise;
         return obv_noisy;
     };
@@ -157,14 +159,17 @@ int main(int argc, char** argv) {
         } else {
             const DataFrame &f1 = historyFrame.back(), f2 = curFrame;
             // 使用三角化观测残差
+            cout << "Correct match pair resutl: " << endl;
+            cout << "true obv[0]: " << f1.obv[0].transpose() << endl;
             vector<Eigen::Vector2d> est1 =
                 CheckReprojectResidual(f1, f1.obv[0], f2, f2.obv[0]);
             // 故意使用误匹配的进行三角化
+            cout << "Wrong match pair resutl: " << endl;
             vector<Eigen::Vector2d> est2 =
                 CheckReprojectResidual(f1, f1.obv[0], f2, f2.obv[1]);
 
             cout << "Add noise result: " << endl;
-            CheckReprojectResidual(f1, AddNoise2Obv(f1.obv[0]), f2, AddNoise2Obv(f2.obv[0]));
+            CheckReprojectResidual(f1, AddNoise2Obv(f1.obv[0]), f2, f2.obv[0]);
 
         }
 
