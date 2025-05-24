@@ -398,11 +398,11 @@ cv::Mat stitchAndDrawMatches(const deque<cv::Mat>& debugImgs,
     return canvas;
 }
 
-cv::Mat stitchAndDrawMatches(const deque<DataFrame>& slidingWindow) {
+cv::Mat stitchAndDrawMatches(const deque<FrameData>& slidingWindow) {
     deque<cv::Mat> debugImgs;
     deque<vector<Eigen::Vector2d>> debugObvs;
 
-    for (const DataFrame& f : slidingWindow) {
+    for (const FrameData& f : slidingWindow) {
         debugObvs.push_back(f.obv);
         debugImgs.push_back(f.debugImg);
     }
@@ -438,7 +438,7 @@ Eigen::Vector3d CalculatePriorPwByHeight(const Eigen::Matrix3d& Rwc,
     return sumPw / obvs.size();
 }
 
-void CalculateInitialPwDLT(const deque<DataFrame>& slidingWindow,
+void CalculateInitialPwDLT(const deque<FrameData>& slidingWindow,
                            const Eigen::Matrix3d& K, Eigen::Vector3d& initPw,
                            Eigen::Vector4d& singularValues) {
     // 定义中间变量
@@ -453,7 +453,7 @@ void CalculateInitialPwDLT(const deque<DataFrame>& slidingWindow,
     vector<Eigen::Vector2d> meanObvs(slidingWindow.size());
     vector<vector<double>> scales(slidingWindow.size());
     for (int i = 0; i < slidingWindow.size(); ++i) {
-        const DataFrame& frame = slidingWindow[i];
+        const FrameData& frame = slidingWindow[i];
         height2Ground[i] = frame.height2Ground;
         Eigen::Vector2d meanObv = Eigen::Vector2d::Zero();
         for (int j = 0; j < obvs[i].size(); ++j) {
@@ -521,7 +521,7 @@ bool CheckInitialPwValidity(const vector<Eigen::Matrix3d>& Rc_w,
     return true;
 }
 
-vector<int> GetEraseObservationId(const deque<DataFrame>& slidingWindow) {
+vector<int> GetEraseObservationId(const deque<FrameData>& slidingWindow) {
     //const int midId = slidingWindow.size() / 2;
     const int midId = 0;  // 保留首帧以保证基线长度持续增长
     vector<int> keepIds, removeIds;
@@ -569,7 +569,7 @@ vector<int> GetEraseObservationId(const deque<DataFrame>& slidingWindow) {
     return removeIds;
 }
 
-void ExtrackPoseAndObvFromSlidingWindow(const deque<DataFrame>& slidingWindow,
+void ExtrackPoseAndObvFromSlidingWindow(const deque<FrameData>& slidingWindow,
                                         vector<Eigen::Matrix3d>& Rc_ws,
                                         vector<Eigen::Vector3d>& Pc_ws,
                                         vector<vector<Eigen::Vector2d>>& obvs) {
@@ -583,7 +583,7 @@ void ExtrackPoseAndObvFromSlidingWindow(const deque<DataFrame>& slidingWindow,
     }
 }
 
-void CullingBadObservationsBeforeInit(deque<DataFrame>& slidingWindow) {
+void CullingBadObservationsBeforeInit(deque<FrameData>& slidingWindow) {
     const vector<int>& mvIds = GetEraseObservationId(slidingWindow);
     for (const int& id : mvIds) {
         slidingWindow[id].timestamp = -1;
@@ -604,8 +604,8 @@ void CullingBadObservationsBeforeInit(deque<DataFrame>& slidingWindow) {
     }
 }
 
-bool CheckLastestObservationUseful(deque<DataFrame>& slidingWindow) {
-    const DataFrame& last = slidingWindow.back();
+bool CheckLastestObservationUseful(deque<FrameData>& slidingWindow) {
+    const FrameData& last = slidingWindow.back();
     // 检验当前id是否值得保留
     int keep = true;
     for (int i = 0; i < slidingWindow.size() - 1; ++i) {
@@ -690,11 +690,11 @@ Eigen::Matrix3d InverseRightJacobianSO3(const Eigen::Vector3d& v) {
     return InverseRightJacobianSO3(v[0], v[1], v[2]);
 }
 
-void PrintReprojectErrorEachFrame(const deque<DataFrame>& sw,
+void PrintReprojectErrorEachFrame(const deque<FrameData>& sw,
                                   const Eigen::Vector3d& Pw,
                                   const Eigen::Matrix3d& K) {
     cout << "each frame obv residual(pixels) in Pw: " << Pw.transpose() << endl;
-    for (const DataFrame& f : sw) {
+    for (const FrameData& f : sw) {
         cout << f.GetObvResidual(Pw, K).norm() << " ";
     }
     cout << endl;
@@ -702,13 +702,13 @@ void PrintReprojectErrorEachFrame(const deque<DataFrame>& sw,
     constexpr double inflatRatio = 100;
     cout << "each frame obv residual(norm plane) in Pw: " << Pw.transpose()
          << endl;
-    for (const DataFrame& f : sw) {
+    for (const FrameData& f : sw) {
         cout << f.GetNormObvResidual(Pw) * inflatRatio << " ";
     }
     cout << endl;
 }
 
-Eigen::Matrix3d CalculateHessianMatrix(const deque<DataFrame>& slidingWindow,
+Eigen::Matrix3d CalculateHessianMatrix(const deque<FrameData>& slidingWindow,
                                        const Eigen::Matrix3d& K,
                                        const Eigen::Vector3d& Pw) {
 
@@ -716,7 +716,7 @@ Eigen::Matrix3d CalculateHessianMatrix(const deque<DataFrame>& slidingWindow,
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
     for (int i = 0; i < slidingWindow.size(); ++i) {
         // 观察雅可比我们可以发现：雅可比与量测无关，因此这里只需要计算主量测即可
-        const DataFrame& f = slidingWindow[i];
+        const FrameData& f = slidingWindow[i];
         const Eigen::Vector3d& Pci = f.GetPc(Pw);
 
         const Eigen::Matrix<double, 2, 3>& Ji =
@@ -787,12 +787,12 @@ Eigen::Vector3d RotationMatrixToZYXEulerAngles(const Eigen::Matrix3d& R) {
     return euler_angles;
 }
 
-vector<Eigen::Vector3d> GetAllEpipolarLines(const deque<DataFrame>& frames,
-                                            const DataFrame& curF) {
+vector<Eigen::Vector3d> GetAllEpipolarLines(const deque<FrameData>& frames,
+                                            const FrameData& curF) {
 
     vector<Eigen::Vector3d> l2s;
     for (int i = 0; i < frames.size(); ++i) {
-        const DataFrame& f = frames[i];
+        const FrameData& f = frames[i];
         const Eigen::Matrix3d R21 = curF.Rc_w * f.Rc_w.transpose();
         const Eigen::Vector3d P21 = curF.Rc_w * (f.GetPw() - curF.GetPw());
         const Eigen::Vector3d px1(f.obv[0].x(), f.obv[0].y(), 1);
@@ -818,7 +818,7 @@ double Point2EpipolarLineDist(const Eigen::Vector3d& l,
     return abs(A * px.x() + B * px.y() + C) / sqrt(A * A + B * B);
 }
 
-Eigen::Vector2d PredictObvByTransform(const DataFrame& f1, const DataFrame& f2,
+Eigen::Vector2d PredictObvByTransform(const FrameData& f1, const FrameData& f2,
                                       const double& s1) {
     //const double s1 = 50;  // 假设地图点在f1相机系下的深度
     const Eigen::Vector3d Pn1 =
@@ -847,7 +847,7 @@ Eigen::Vector2d PredictObvByTransform(const DataFrame& f1, const DataFrame& f2,
     return predictObv;
 }
 
-Eigen::Vector2d PredictObvByRotation(const DataFrame& f1, const DataFrame& f2) {
+Eigen::Vector2d PredictObvByRotation(const FrameData& f1, const FrameData& f2) {
     // 当位移小于0.1时，我们使用该函数来预测obv位置，以应对退化场景
     const Eigen::Vector3d Pn1 =
         invK * Eigen::Vector3d(f1.obv[0].x(), f1.obv[0].y(), 1);
@@ -858,9 +858,9 @@ Eigen::Vector2d PredictObvByRotation(const DataFrame& f1, const DataFrame& f2) {
     return predictObv;
 }
 
-vector<Eigen::Vector2d> CheckReprojectResidual(const DataFrame& f1,
+vector<Eigen::Vector2d> CheckReprojectResidual(const FrameData& f1,
                                                const Eigen::Vector2d& obv1,
-                                               const DataFrame& f2,
+                                               const FrameData& f2,
                                                const Eigen::Vector2d& obv2) {
     vector<Eigen::Matrix3d> Rcw = {f1.Rc_w, f2.Rc_w};
     vector<Eigen::Vector3d> Pcw = {f1.Pc_w, f2.Pc_w};

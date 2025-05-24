@@ -5,17 +5,19 @@
 
 #include <Eigen/Dense>  // 仅具有矩阵运算基本的定义及基础计算
 
-struct DataFrame {
-    DataFrame(const Eigen::Matrix3d& _Rc_w, const Eigen::Vector3d& _Pc_w,
+struct FrameData {
+    FrameData(const Eigen::Matrix3d& _Rc_w, const Eigen::Vector3d& _Pc_w,
               const double& height, const std::vector<Eigen::Vector2d>& _obv,
               const double& _t, const cv::Mat& img);
 
     Eigen::Vector3d GetPw() const { return -Rc_w.transpose() * Pc_w; }
-    Eigen::Vector3d GetPc(const Eigen::Vector3d& Pw) const {return Rc_w * Pw + Pc_w;}
+    Eigen::Vector3d GetPc(const Eigen::Vector3d& Pw) const {
+        return Rc_w * Pw + Pc_w;
+    }
     Eigen::Vector2d GetMainObv() const { return obv[0]; }
     // TODO: 可以根据残差去剔除一些没有收敛的观测以期提高精度
     Eigen::Vector2d GetObvResidual(const Eigen::Vector3d& Pw,
-                          const Eigen::Matrix3d& K) const;
+                                   const Eigen::Matrix3d& K) const;
     //Eigen::Vector2d GetObvResidual(const Eigen::Vector3d& Pc){
     //    const Eigen::Vector2d Pn = Pc/Pc.z()
     //}
@@ -75,4 +77,27 @@ class Pose {
     Pose Inverse() { return Pose(q_wb_.inverse(), -(q_wb_.inverse() * p_wb_)); }
     Eigen::Quaterniond q_wb_;
     Eigen::Vector3d p_wb_;
+};
+
+struct InverseDepthFilter {
+    InverseDepthFilter(const double& idepth, const double& depthMin,
+                       const double& depthMax, const FrameData& curF);
+
+    InverseDepthFilter(const FrameData& curF);
+
+    bool Update(const FrameData& curF);
+
+    // 鲁棒性更新
+    bool UpdateWithRobustCheck(const double& idepthObs,
+                               const double& obsNoisepixel,
+                               const double& baseline);
+
+    // 坐标系变换（带协方差传播）
+    bool TransformHost(const FrameData& curF, const Eigen::Matrix3d& invK);
+
+    double idepth_ = 1.0;
+    double cov_ = 0.08;  // 默认初始值
+    bool initialized_ = false;
+    FrameData host_;
+    FrameData last_;
 };

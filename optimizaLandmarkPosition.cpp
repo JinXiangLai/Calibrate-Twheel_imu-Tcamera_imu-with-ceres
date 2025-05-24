@@ -60,7 +60,7 @@ class SolveLandmarkPosition {
     Eigen::Matrix3d K_;
 };
 
-bool SlidingWindowSolvedByCeres(const std::deque<DataFrame>& slidingWindow,
+bool SlidingWindowSolvedByCeres(const std::deque<FrameData>& slidingWindow,
                                 const Eigen::Vector3d& priorPw,
                                 const PriorEstimateData& priorData,
                                 const double& accumulateBaseline,
@@ -68,7 +68,7 @@ bool SlidingWindowSolvedByCeres(const std::deque<DataFrame>& slidingWindow,
                                 const int updateTime, Eigen::Vector3d& optPw,
                                 Eigen::Matrix3d& cov);
 
-bool PositionConvergeWhenInitialized(const std::deque<DataFrame>& slidingWindow,
+bool PositionConvergeWhenInitialized(const std::deque<FrameData>& slidingWindow,
                                      const Eigen::Matrix3d& K,
                                      Eigen::Vector3d& optPw,
                                      Eigen::Matrix3d& cov);
@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
     PriorEstimateData priorData;
 
     // 滑动窗口
-    deque<DataFrame> slidingWindow;
+    deque<FrameData> slidingWindow;
     double accumulateBaseline = 0.0;
     double lastUpdateAccBaseline = 0.0;
 
@@ -266,7 +266,7 @@ int main(int argc, char** argv) {
         }
 
         // 位姿添加到滑窗
-        DataFrame frame(Rw_c2.transpose(), Rw_c2.transpose() * -Pw_c2,
+        FrameData frame(Rw_c2.transpose(), Rw_c2.transpose() * -Pw_c2,
                         depth - Pw_c2.z(), obvEachFrame, double(updateTime),
                         debugImg);
         slidingWindow.push_back(frame);
@@ -410,11 +410,11 @@ int main(int argc, char** argv) {
         // 移除滑动窗口元素
         auto MoveSlidingWindow = [&slidingWindow]() -> void {
             // 移除与最新帧水平基线最短的帧
-            const DataFrame& last = slidingWindow.back();
+            const FrameData& last = slidingWindow.back();
             int minDistId = -1;
             double minHorizontalBaseline = 1e10;
             for (int i = 0; i < slidingWindow.size() - 1; ++i) {
-                const DataFrame& cur = slidingWindow[i];
+                const FrameData& cur = slidingWindow[i];
                 // 不一定需要水平位移才能可观，水平位移只是针对位于图像中心的像素而言，对于图像中心像素，
                 // 其在归一化平面坐标为(0, 0)，对于方程无贡献
                 const double bs = (-cur.Rc_w.transpose() * cur.Pc_w +
@@ -558,7 +558,7 @@ bool SolveLandmarkPosition::EstimateCovariance(
     }
 }
 
-bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
+bool SlidingWindowSolvedByCeres(const deque<FrameData>& slidingWindow,
                                 const Eigen::Vector3d& priorPw,
                                 const PriorEstimateData& priorData,
                                 const double& accumulateBaseline,
@@ -628,7 +628,7 @@ bool SlidingWindowSolvedByCeres(const deque<DataFrame>& slidingWindow,
 #endif
 }
 
-bool PositionConvergeWhenInitialized(const std::deque<DataFrame>& slidingWindow,
+bool PositionConvergeWhenInitialized(const std::deque<FrameData>& slidingWindow,
                                      const Eigen::Matrix3d& K,
                                      Eigen::Vector3d& optPw,
                                      Eigen::Matrix3d& cov) {
@@ -646,7 +646,7 @@ bool PositionConvergeWhenInitialized(const std::deque<DataFrame>& slidingWindow,
         // TODO: 对地高计算(X, Y, Z)
         Eigen::Vector3d sumPw(0, 0, 0);
         for (int i = 0; i < slidingWindow.size(); ++i) {
-            const DataFrame& f = slidingWindow[i];
+            const FrameData& f = slidingWindow[i];
             const Eigen::Vector2d& o = f.obv[0];
             const Eigen::Vector3d Pn((o.x() - cx) * invFx, (o.y() - cy) * invFy,
                                      1);

@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
     auto ProjectPws2CurFrame =
         [&Pws, &depth](const Eigen::Matrix3d& Rwc = Eigen::Matrix3d::Identity(),
                        const Eigen::Vector3d& Pwc = {0, 0, 0},
-                       const int& time = 0) -> DataFrame {
+                       const int& time = 0) -> FrameData {
         const Eigen::Matrix3d Rc_w = Rwc.transpose();
         // c是新原点，因此需要先计算c系原点到w原点的方向c->w，再旋转到c系即可
         const Eigen::Vector3d Pc_w = Rc_w * (Eigen::Vector3d(0, 0, 0) - Pwc);
@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
         }
         //cv::imshow("debug"+to_string(time), debugImg);
         //cv::waitKey();
-        return DataFrame(Rc_w, Pc_w, depth - Pwc.z(), obvEachFrame, time,
+        return FrameData(Rc_w, Pc_w, depth - Pwc.z(), obvEachFrame, time,
                          debugImg);
     };
 
@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
     Eigen::Vector3d lastPw_c = Eigen::Vector3d::Zero();
 
     // 滑动窗口
-    deque<DataFrame> historyFrame = {
+    deque<FrameData> historyFrame = {
         ProjectPws2CurFrame(lastRw_c, lastPw_c, 0)};  // 初始化第一帧
     double accumulateBaseline = 0.0;
     double lastUpdateAccBaseline = 0.0;
@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
         cout << "current accumulateBaseline: " << accumulateBaseline << endl;
 
         // 注意，当前辅助进近还不需要做的现在的思路这么复杂
-        DataFrame curFrame = ProjectPws2CurFrame(Rw_c2, Pw_c2, updateTime);
+        FrameData curFrame = ProjectPws2CurFrame(Rw_c2, Pw_c2, updateTime);
 
         const Eigen::Vector2d predictObv =
             PredictObvByTransform(historyFrame.back(), curFrame, s1);
@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
                  << (est2 - curFrame.obv[0]).norm()
                  << " diff2: " << (est2 - curFrame.obv[1]).norm() << endl;
         } else {
-            const DataFrame &f1 = historyFrame.back(), f2 = curFrame;
+            const FrameData &f1 = historyFrame.back(), f2 = curFrame;
             // 使用三角化观测残差
             cout << "Correct match pair resutl: " << endl;
             cout << "true obv[0]: " << f1.obv[0].transpose() << endl;

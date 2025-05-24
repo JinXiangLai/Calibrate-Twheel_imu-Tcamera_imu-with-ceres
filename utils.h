@@ -33,7 +33,7 @@ Eigen::Matrix<double, 2, 3> CalculateObvWrtPwJacobian(
     const Eigen::Matrix3d& K, const Eigen::Vector3d& Pw);
 
 Eigen::Matrix3d CalculateHessianMatrix(
-    const std::deque<DataFrame>& slidingWindow, const Eigen::Matrix3d& K,
+    const std::deque<FrameData>& slidingWindow, const Eigen::Matrix3d& K,
     const Eigen::Vector3d& Pw);
 
 bool CalculateCovariance(const Eigen::Matrix3d& H, Eigen::Matrix3d& cov,
@@ -79,7 +79,7 @@ Eigen::Vector2d ProjectPw2Pixel(const Eigen::Vector3d& Pw,
                                 const Eigen::Vector3d& Pcw,
                                 const Eigen::Matrix3d& K);
 
-void CalculateInitialPwDLT(const std::deque<DataFrame>& slidingWindow,
+void CalculateInitialPwDLT(const std::deque<FrameData>& slidingWindow,
                            const Eigen::Matrix3d& K, Eigen::Vector3d& initPw,
                            Eigen::Vector4d& singularValues);
 
@@ -88,10 +88,10 @@ bool CheckInitialPwValidity(const std::vector<Eigen::Matrix3d>& Rc_w,
                             const Eigen::Vector3d& initPw);
 
 std::vector<int> GetEraseObservationId(
-    const std::deque<DataFrame>& slidingWindow);
+    const std::deque<FrameData>& slidingWindow);
 
 void ExtrackPoseAndObvFromSlidingWindow(
-    const std::deque<DataFrame>& slidingWindow,
+    const std::deque<FrameData>& slidingWindow,
     std::vector<Eigen::Matrix3d>& Rc_ws, std::vector<Eigen::Vector3d>& Pc_ws,
     std::vector<std::vector<Eigen::Vector2d>>& obvs);
 
@@ -105,7 +105,7 @@ cv::Mat stitchAndDrawMatches(
     const std::deque<cv::Mat>& debugImgs,
     const std::deque<std::vector<Eigen::Vector2d>>& obvs);
 
-cv::Mat stitchAndDrawMatches(const std::deque<DataFrame>& slidingWindow);
+cv::Mat stitchAndDrawMatches(const std::deque<FrameData>& slidingWindow);
 
 // 直接利用对地高度计算初值
 Eigen::Vector3d CalculatePriorPwByHeight(
@@ -113,9 +113,9 @@ Eigen::Vector3d CalculatePriorPwByHeight(
     const double& horizontalHeight, const Eigen::Matrix3d& K,
     const std::vector<Eigen::Vector2d>& obvs);
 
-void CullingBadObservationsBeforeInit(std::deque<DataFrame>& slidingWindow);
+void CullingBadObservationsBeforeInit(std::deque<FrameData>& slidingWindow);
 
-bool CheckLastestObservationUseful(std::deque<DataFrame>& slidingWindow);
+bool CheckLastestObservationUseful(std::deque<FrameData>& slidingWindow);
 
 Eigen::Vector3d LogSO3(const Eigen::Matrix3d& R);
 
@@ -124,7 +124,7 @@ Eigen::Matrix3d InverseRightJacobianSO3(const double x, const double y,
 
 Eigen::Matrix3d InverseRightJacobianSO3(const Eigen::Vector3d& v);
 
-void PrintReprojectErrorEachFrame(const std::deque<DataFrame>& sw,
+void PrintReprojectErrorEachFrame(const std::deque<FrameData>& sw,
                                   const Eigen::Vector3d& Pw,
                                   const Eigen::Matrix3d& K);
 
@@ -135,17 +135,17 @@ double CalculateChi2Distance(const Eigen::Matrix3d& cov,
 Eigen::Vector3d RotationMatrixToZYXEulerAngles(const Eigen::Matrix3d& R);
 
 std::vector<Eigen::Vector3d> GetAllEpipolarLines(
-    const std::deque<DataFrame>& frames, const DataFrame& curF);
+    const std::deque<FrameData>& frames, const FrameData& curF);
 
 double Point2EpipolarLineDist(const Eigen::Vector3d& l,
                               const Eigen::Vector2d& px);
 
-Eigen::Vector2d PredictObvByTransform(const DataFrame& f1, const DataFrame& f2,
+Eigen::Vector2d PredictObvByTransform(const FrameData& f1, const FrameData& f2,
                                       const double& s1 = 20.0);
 
-Eigen::Vector2d PredictObvByRotation(const DataFrame& f1, const DataFrame& f2);
+Eigen::Vector2d PredictObvByRotation(const FrameData& f1, const FrameData& f2);
 
-std::vector<Eigen::Vector2d> CheckReprojectResidual(const DataFrame& f1,
+std::vector<Eigen::Vector2d> CheckReprojectResidual(const FrameData& f1,
                                                const Eigen::Vector2d& obv1,
-                                               const DataFrame& f2,
+                                               const FrameData& f2,
                                                const Eigen::Vector2d& obv2);
