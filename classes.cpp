@@ -7,6 +7,10 @@
 
 using namespace std;
 
+constexpr double kMinDepth = 10.0;
+
+constexpr double kInitializeRandomDepth = 1.0;
+
 FrameData::FrameData(const Eigen::Matrix3d& _Rc_w, const Eigen::Vector3d& _Pc_w,
                      const double& height,
                      const std::vector<Eigen::Vector2d>& _obv, const double& _t,
@@ -77,6 +81,22 @@ InverseDepthFilter::InverseDepthFilter(const double& idepth,
     initialized_ = true;
 }
 
+bool InverseDepthFilter::RobustChi2Check(const double& idepthObv, const double& covObv) {
+    const double residual = idepth_ - idepthObv;
+    const double fuseCov = cov_ + covObv;
+    const double r2 = residual * residual;
+    const double chi2 = r2 / fuseCov;
+
+    constexpr double kChi2Th = 3.84;
+    if(chi2 > kChi2Th) {
+        cout << "Fail chi2 check for residual=" << residual << " r^2=" << r2 << endl;
+        return false;
+    }
+
+    cout << "Pass chi2 check for residual=" << residual << " r^2=" << r2 << endl;
+    return true;
+}
+
 // 鲁棒性更新
 bool InverseDepthFilter::UpdateWithRobustCheck(const double& idepthObs,
                                                const double& obsNoisepixel,
@@ -137,7 +157,12 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
     // 最终还是要使用最小二乘解法
     res = res0;
 
-    if (res[0] < 1.0) {
+    if(kInitializeRandomDepth > 0 && !initialized_) {
+        initialized_ = true;
+        return true;
+    }
+
+    if (res[0] < kMinDepth && kInitializeRandomDepth <= 0) {
         return false;
     }
     if (!initialized_) {
@@ -169,14 +194,18 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
     // 新的深度及观测方差
     const double noiseIdepth = 1.0 / noiseDepth;
     const double estIdepth = 1.0 / res[0];
-    const double obvCov_ = pow((estIdepth - noiseIdepth), 2);
+    const double obvCov = pow((estIdepth - noiseIdepth), 2);
+
+    if(!RobustChi2Check(estIdepth, obvCov)) {
+        return false;
+    }
 
     // 更新均值及方差
     // cov_越小说明收敛越好，但后续需要控制其大小
-    const double denominator = cov_ + obvCov_;
+    const double denominator = cov_ + obvCov;
     // 1.0-0.01 = 0.99，所以不确定范围在[1.0-0.99, 1.0+0.99]，因此直接使用逆深度即可计算
-    idepth_ = (obvCov_ * idepth_ + cov_ * estIdepth) / denominator;
-    cov_ = cov_ * obvCov_ / denominator;
+    idepth_ = (obvCov * idepth_ + cov_ * estIdepth) / denominator;
+    cov_ = cov_ * obvCov / denominator;
 
     const double obvScov = pow((noiseDepth - res[0]), 2);
     const double sden = scov_ + obvScov;

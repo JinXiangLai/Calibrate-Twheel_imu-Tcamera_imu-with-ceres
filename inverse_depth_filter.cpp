@@ -29,6 +29,7 @@ int main(int argc, char** argv) {
     double depth = 50.0;        //
     double distX = radius * 4;  // 两个marker距离
     constexpr int kMarkerNum = 2;
+    double startX = 10, startY = 11;
     printf("Default parameters:\n\tradius=%f, depth=%f, distX=%f\n", radius,
            depth, distX);
     if (argc > 1) {
@@ -38,12 +39,17 @@ int main(int argc, char** argv) {
     if (argc > 2) {
         depth = atof(argv[2]);
     }
-    printf("Current parameters:\n\tradius=%f, depth=%f, distX=%f\n", radius,
-           depth, distX);
+    if (argc > 3) {
+        startX = atof(argv[3]);
+    }
+    if (argc > 4) {
+        startY = atof(argv[4]);
+    }
+    printf("Current parameters:\n\tradius=%f, depth=%f, distX=%f, startX=%f, startY=%f\n", radius,
+           depth, distX, startX, startY);
 
     // 初始化两个一模一样的marker点
     // clang-format off
-    double startX = 10, startY = 11;
     Eigen::Matrix<double, 3, kMarkerNum> Pws = 
         (Eigen::Matrix<double, 3, kMarkerNum>() << startX, startX + distX,
                                                    startY, startY,
