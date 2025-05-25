@@ -7,9 +7,19 @@
 
 using namespace std;
 
-constexpr double kMinDepth = 10.0;
-
 constexpr double kInitializeRandomDepth = 1.0;
+constexpr int kSigmaNum =
+    3;  // 验证当d=10,std=5时，深度表示范围在-5到25，逆深度表示范围会大于此，因为高斯分布是非线性的。
+// ρ=0.1, istd=0.2，很明显，表示范围在-0.1到0.3，覆盖了正、负无穷的深度范围
+
+// 根据深度范围设置方差边界，实现响应小的变化
+constexpr double kMinDepth = 10.0;
+constexpr double kMaxDepth = 100.0;
+constexpr double kMaxInverseDepth = 1.0 / kMinDepth;
+constexpr double kMinInverseDepth = 1.0 / kMaxDepth;
+constexpr double kSensorMeasureNoise = 0.2;  // 传感器噪声
+constexpr double kMaxIdepthVar = 0.1;  // 假设深度为50m，逆深度为0.02
+constexpr double kMinIdepthVar = kSensorMeasureNoise / kMaxDepth;
 
 FrameData::FrameData(const Eigen::Matrix3d& _Rc_w, const Eigen::Vector3d& _Pc_w,
                      const double& height,
@@ -84,7 +94,7 @@ InverseDepthFilter::InverseDepthFilter(const FrameData& curF)
     : host_(curF), last_(curF) {
     idepth_ = 1.0 / 10.;
     const double depthMin = 1.0, depthMax = 100.0;
-    cov_ = std::pow((1.0 / depthMin - 1.0 / depthMax) / std::sqrt(12), 2);
+    var_ = std::pow((1.0 / depthMin - 1.0 / depthMax) / std::sqrt(12), 2);
 }
 
 InverseDepthFilter::InverseDepthFilter(const double& idepth,
@@ -93,15 +103,21 @@ InverseDepthFilter::InverseDepthFilter(const double& idepth,
                                        const FrameData& curF)
     : host_(curF), last_(curF) {
     idepth_ = idepth;
-    cov_ = std::pow((1.0 / depthMin - 1.0 / depthMax) / std::sqrt(12), 2);
+    var_ = std::pow((1.0 / depthMin - 1.0 / depthMax) / std::sqrt(12), 2);
     initialized_ = true;
 }
 
-bool InverseDepthFilter::RobustChi2Check(const double& idepthObv,
-                                         const double& covObv) {
-    const double residual = idepth_ - idepthObv;
-    const double fuseCov = cov_ + covObv;
+bool InverseDepthFilter::RobustChi2Check(const double& obvIdepth,
+                                         const double& obvVar) {
+    if (isnan(obvVar) || isinf(obvVar) || obvVar > 2.0 * var_) {
+        cout << "RobustChi2Check failed for obv cov: " << obvVar << " > 2.0*"
+             << var_ << endl;
+        return false;
+    }
+    const double residual = idepth_ - obvIdepth;
+    const double fuseCov = var_ + obvVar;
     const double r2 = residual * residual;
+    cout << "Chi2: residual=" << residual << ", obvVar=" << obvVar << endl;
     const double chi2 = r2 / fuseCov;
 
     constexpr double kChi2Th = 3.84;
@@ -112,7 +128,7 @@ bool InverseDepthFilter::RobustChi2Check(const double& idepthObv,
     }
 
     cout << "Pass chi2 check for residual=" << residual << " r^2=" << r2
-         << endl;
+         << " obvVar=" << obvVar << endl;
     return true;
 }
 
@@ -122,17 +138,17 @@ bool InverseDepthFilter::UpdateWithRobustCheck(const double& idepthObs,
                                                const double& baseline) {
     const double cov_obs = std::pow(obsNoisepixel / baseline, 2);
     const double residual = idepthObs - idepth_;
-    const double residualStd = std::sqrt(cov_ + cov_obs);
+    const double residualStd = std::sqrt(var_ + cov_obs);
 
-    if (residual * residual / (cov_ + cov_obs) >
+    if (residual * residual / (var_ + cov_obs) >
         3.84) {       // 3.84 自由度为1的卡方分布
-        cov_ *= 1.5;  // 异常值处理
+        var_ *= 1.5;  // 异常值处理
         return false;
     }
 
-    const double denominator = cov_ + cov_obs;
-    idepth_ = (idepth_ * cov_ + idepthObs * cov_obs) / denominator;
-    cov_ = (cov_ * cov_obs) / denominator;
+    const double denominator = var_ + cov_obs;
+    idepth_ = (idepth_ * var_ + idepthObs * cov_obs) / denominator;
+    var_ = (var_ * cov_obs) / denominator;
     return true;
 }
 
@@ -217,28 +233,33 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
 #ifdef SLAM14
     // 新的深度及观测方差
     const double noiseIdepth = 1.0 / noiseDepth;
-    const double obvCov = pow((estIdepth - noiseIdepth), 2);
+    const double obvVar = pow((estIdepth - noiseIdepth), 2);
     const double obvScov = pow((noiseDepth - res[0]), 2);  // 正深度方差
 #else
-    const double obvCov = CalculateVariance(curF, estIdepth, invK, K);
+    const double obvVar = CalculateVariance(curF, estIdepth, invK, K);
+    // 主要观察退化运动下的不确定度
+    PrintDebugInfo(estIdepth, obvVar);
 #endif
-    if (!RobustChi2Check(estIdepth, obvCov)) {
+    if (!RobustChi2Check(estIdepth, obvVar)) {
         return false;
     }
 
     // 更新均值及方差
     // cov_越小说明收敛越好，但后续需要控制其大小
-    const double denominator = cov_ + obvCov;
+    const double denominator = var_ + obvVar;
     // 1.0-0.01 = 0.99，所以不确定范围在[1.0-0.99, 1.0+0.99]，因此直接使用逆深度即可计算
-    idepth_ = (obvCov * idepth_ + cov_ * estIdepth) / denominator;
-    cov_ = cov_ * obvCov / denominator;
+    idepth_ = (obvVar * idepth_ + var_ * estIdepth) / denominator;
+    var_ = var_ * obvVar / denominator;
+    PrintDebugInfo(idepth_, var_);
 
     const double obvScov = pow((noiseDepth - res[0]), 2);
     const double sden = scov_ + obvScov;
     s_ = (obvScov * s_ + scov_ * res[0]) / sden;
     scov_ = scov_ * obvScov / sden;
+    cout << "depth range: [" << s_ - sqrt(scov_) << ", " << s_ << ", "
+         << s_ + sqrt(scov_) << "], " << endl;
 
-    PrintDebugInfo();
+    CheckVarianceBoundary();
 
     // 这里我们似乎无法计算协方差，应该说，协方差必须与运动是有关系的
     // 那么按理说，如果运动是退化的，那我们假设一个像素偏差，其实就会引起很大的不确定度，
@@ -259,7 +280,7 @@ bool InverseDepthFilter::TransformHost(const FrameData& curF,
     const Eigen::Vector3d Pc2 = Rc2_c1 * Pc1 + Pc2_c1 * idepth_;
 
     if (Pc2.z() <= 0) {
-        cov_ *= 2.0;  // 失效处理
+        var_ *= 2.0;  // 失效处理
         return false;
     }
 
@@ -278,7 +299,7 @@ bool InverseDepthFilter::TransformHost(const FrameData& curF,
     // dρ2/dρ1 = -1.0/(1.0/ρ1 * A + B)^2 * -A/ρ1^2 = A/(1.0/ρ1 * A * ρ1  + B * ρ1)^2 = A/(A+B*ρ1)^2
     const double J = Pc2_c1.z() / (Pc2.z() * Pc2.z());
     idepth_ = 1.0 / Pc2.z();
-    cov_ = J * cov_ * J;
+    var_ = J * var_ * J;
     host_ = curF;
     return true;
 }
@@ -340,13 +361,33 @@ double InverseDepthFilter::CalculateVariance(const FrameData& curF,
     return variance;
 }
 
-void InverseDepthFilter::PrintDebugInfo() {
-    const double id0 = idepth_ - sqrt(cov_), id1 = idepth_ + sqrt(cov_);
-    cout << "Inverse depth info:\nidepth range: [" << id0 << ", " << idepth_
-         << ", " << id1 << "], corresponding depth: [" << 1.0 / id0 << ", "
-         << 1.0 / idepth_ << ", " << 1.0 / id1 << "]" << endl;
+bool InverseDepthFilter::CheckVarianceBoundary() {
+    if (var_ < kMinIdepthVar) {
+        cout << "CheckVarianceBoundary failed var_: " << var_
+             << "< minVar=" << kMinIdepthVar << endl;
+        var_ = kMinIdepthVar;
+        return false;
+    }
 
-    const double d0 = s_ - sqrt(scov_), d1 = s_ + sqrt(scov_);
-    cout << "Depth info:\ndepth s range: [" << d0 << ", " << s_ << ", " << d1
-         << "]" << endl;
+    if (var_ > kMaxIdepthVar) {
+        cout << "CheckVarianceBoundary failed var_: " << var_
+             << "> maxVar=" << kMaxIdepthVar << endl;
+        var_ = kMaxIdepthVar;
+        return false;
+    }
+
+    cout << "Pass variance check, var_: " << var_ << endl;
+    return true;
+}
+
+void InverseDepthFilter::PrintDebugInfo(const double& idepth,
+                                        const double var) {
+    const double std = sqrt(var);
+    const double id_1 = idepth - std, id1 = idepth + std;
+    const double id_3 = idepth - kSigmaNum * std,
+                 id3 = idepth + kSigmaNum * std;
+    cout << "Inverse depth info:\nidepth range: [" << id_1 << ", " << idepth
+         << ", " << id1 << "], corresponding 1 sigma depth: [" << 1.0 / id_1
+         << ", " << 1.0 / idepth << ", " << 1.0 / id1 << "] 3 sigma depth: ["
+         << 1.0 / id_3 << ", " << 1.0 / id3 << "]" << endl;
 }

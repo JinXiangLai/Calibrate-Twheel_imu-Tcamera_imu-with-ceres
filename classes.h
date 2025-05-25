@@ -114,10 +114,12 @@ struct InverseDepthFilter {
         const double& rho1, const Eigen::Vector3d& Pn1,
         const Eigen::Vector3d& Pc2, const Eigen::Matrix3d& K);
 
-    void PrintDebugInfo();
+    void PrintDebugInfo(const double& idepth, const double var);
+
+    bool CheckVarianceBoundary();
 
     double idepth_ = 1.0;
-    double cov_ = 0.08;  // 默认初始值，需设置上下限
+    double var_ = 0.08;  // 默认初始值，需设置上下限
     bool initialized_ = false;
 
     double s_ = 1.0;
