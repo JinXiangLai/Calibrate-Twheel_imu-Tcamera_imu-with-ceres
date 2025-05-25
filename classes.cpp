@@ -25,6 +25,22 @@ FrameData::FrameData(const Eigen::Matrix3d& _Rc_w, const Eigen::Vector3d& _Pc_w,
     return;
 }
 
+FrameData::FrameData(const Eigen::Matrix3d& _Rc_w, const Eigen::Vector3d& _Pc_w,
+                     const double& height,
+                     const std::vector<Eigen::Vector2d>& _obv,
+                     const double& detectRadius, const double& _t,
+                     const cv::Mat& img)
+    : timestamp(_t),
+      Rc_w(_Rc_w),
+      Pc_w(_Pc_w),
+      height2Ground(height),
+      obv(_obv),
+      debugImg(img),
+      radius(detectRadius) {
+    obvNorm << (obv[0].x() - kCx) / kFx, (obv[0].y() - kCy) / kFy;
+    return;
+}
+
 void PriorEstimateData::UpdateMean(const Eigen::Vector3d& p) {
     const Eigen::Vector3d sum = updateCount_ * Pw_ + p;
     ++updateCount_;
@@ -81,19 +97,22 @@ InverseDepthFilter::InverseDepthFilter(const double& idepth,
     initialized_ = true;
 }
 
-bool InverseDepthFilter::RobustChi2Check(const double& idepthObv, const double& covObv) {
+bool InverseDepthFilter::RobustChi2Check(const double& idepthObv,
+                                         const double& covObv) {
     const double residual = idepth_ - idepthObv;
     const double fuseCov = cov_ + covObv;
     const double r2 = residual * residual;
     const double chi2 = r2 / fuseCov;
 
     constexpr double kChi2Th = 3.84;
-    if(chi2 > kChi2Th) {
-        cout << "Fail chi2 check for residual=" << residual << " r^2=" << r2 << endl;
+    if (chi2 > kChi2Th) {
+        cout << "Fail chi2 check for residual=" << residual << " r^2=" << r2
+             << endl;
         return false;
     }
 
-    cout << "Pass chi2 check for residual=" << residual << " r^2=" << r2 << endl;
+    cout << "Pass chi2 check for residual=" << residual << " r^2=" << r2
+         << endl;
     return true;
 }
 
@@ -122,7 +141,7 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
     // 1.0/ρ1 * Pn1 = R12 * 1.0/ρ2 * Pn2 + P12
     // [Pn1 - R12*Pn2]_[3x2] * [1.0/ρ1, 1.0/ρ2] = P12 (1)
 
-    // [Pn2]x * Pn1 * 1.0/ρ1 = [Pn2]x * P12 
+    // [Pn2]x * Pn1 * 1.0/ρ1 = [Pn2]x * P12
     // 1.0/ρ1 = ([Pn2]x * Pn1).T * [Pn2]x * P12 / (([Pn2]x * Pn1).T * [Pn2]x * Pn1) (2)
     // 注意：这里不能再化简，再乘以Pn1.T就变成 0=0了
     const Eigen::Vector3d Pn1 =
@@ -136,7 +155,8 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
     Eigen::Matrix<double, 3, 2> A0 = Eigen::Matrix<double, 3, 2>::Zero();
     A0.col(0) = Pn1;
     A0.col(1) = -R12 * Pn2;
-    const Eigen::Vector2d res0 = A0.fullPivHouseholderQr().solve(P12);  // A.jacobiSvd().solve(b);
+    const Eigen::Vector2d res0 =
+        A0.fullPivHouseholderQr().solve(P12);  // A.jacobiSvd().solve(b);
 
     // 使用B/A计算出来的方法2比上述最小二乘误差大得多的原因不在于输入观测是否有取整数
     // 理论偏差分析：
@@ -157,7 +177,7 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
     // 最终还是要使用最小二乘解法
     res = res0;
 
-    if(kInitializeRandomDepth > 0 && !initialized_) {
+    if (kInitializeRandomDepth > 0 && !initialized_) {
         initialized_ = true;
         return true;
     }
@@ -174,7 +194,10 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
 
     cout << "src depth_: " << 1.0 / idepth_ << " estimate depth: " << res[0]
          << endl;
-    // 更新协方差
+
+    // 更新均值及协方差
+    const double estIdepth = 1.0 / res[0];
+    //#define SLAM14
 
     // 计算N个像素偏差引起的深度不确定度
     // 原理：根据极线约束，认为在极线上存在N个像素偏差时，会引起深度的多大变化
@@ -191,12 +214,15 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
     const double gamma = M_PI - alpha - beltaNew;
     const double noiseDepth = t.norm() * sin(beltaNew) / sin(gamma);
 
+#ifdef SLAM14
     // 新的深度及观测方差
     const double noiseIdepth = 1.0 / noiseDepth;
-    const double estIdepth = 1.0 / res[0];
     const double obvCov = pow((estIdepth - noiseIdepth), 2);
-
-    if(!RobustChi2Check(estIdepth, obvCov)) {
+    const double obvScov = pow((noiseDepth - res[0]), 2);  // 正深度方差
+#else
+    const double obvCov = CalculateVariance(curF, estIdepth, invK, K);
+#endif
+    if (!RobustChi2Check(estIdepth, obvCov)) {
         return false;
     }
 
@@ -255,6 +281,63 @@ bool InverseDepthFilter::TransformHost(const FrameData& curF,
     cov_ = J * cov_ * J;
     host_ = curF;
     return true;
+}
+
+Eigen::Vector2d InverseDepthFilter::CalculateObvWrtIdepth1Jacobian(
+    const Eigen::Matrix3d& Rc2_c1, const Eigen::Vector3d& Pc2_c1,
+    const double& rho1, const Eigen::Vector3d& Pn1, const Eigen::Vector3d& Pc2,
+    const Eigen::Matrix3d& K) {
+
+    const Eigen::Matrix<double, 2, 3> J_r_Pn2 = K.block(0, 0, 2, 3);
+    const double invZ = 1 / Pc2[2];
+    const double invZ2 = invZ * invZ;
+    // clang-format off
+        const Eigen::Matrix3d J_Pn2_Pc2 =
+            (Eigen::Matrix3d() << invZ, 0, -Pc2[0] * invZ2, 
+                                0, invZ, -Pc2[1] * invZ2,
+                                0, 0, 0).finished();
+    // clang-format on
+    const Eigen::Matrix3d& J_Pc2_Pc1 = Rc2_c1;
+
+    // Pc1 = 1.0/rho1 * Pn1
+    const double invSquareRho1 = 1.0 / (rho1 * rho1);
+    const Eigen::Vector3d J_Pc1_rho1 = -invSquareRho1 * Pn1;
+    const Eigen::Vector2d J_residual_rho1 =
+        J_r_Pn2 * J_Pn2_Pc2 * J_Pc2_Pc1 * J_Pc1_rho1;
+    return J_residual_rho1;
+}
+
+double InverseDepthFilter::CalculateVariance(const FrameData& curF,
+                                             const double& estIdepth,
+                                             const Eigen::Matrix3d& invK,
+                                             const Eigen::Matrix3d& K) {
+    const Eigen::Matrix3d R21 = curF.Rc_w * host_.Rc_w.transpose();
+    const Eigen::Vector3d P21 = curF.Rc_w * (host_.GetPw() - curF.GetPw());
+    const Eigen::Vector3d Pn1 =
+        invK * Eigen::Vector3d(host_.obv[0].x(), host_.obv[0].y(), 1.0);
+
+    const Eigen::Vector3d Pc2 = R21 * 1.0 / estIdepth * Pn1 + P21;
+    const Eigen::Vector3d Pn2 = Pc2 / Pc2.z();
+    const Eigen::Vector2d obv2 = K.block(0, 0, 2, 3) * Pn2;
+    const Eigen::Vector2d residual = obv2 - curF.obv[0];
+
+    // 求残差关于ρ1的雅可比，据次推导
+    // r = J * ρ1
+    // J.T * r = J.T * J * ρ1 = a * ρ1
+    // ρ1 = 1.0/a * J.T * r
+    // r服从N～(0, Σ)高斯分布
+    // 令A=1.0/a * J.T， 则ρ1服从N~(ρ1, A*Σ*A.T)
+    const Eigen::Vector2d J_res_rho1 =
+        CalculateObvWrtIdepth1Jacobian(R21, P21, estIdepth, Pn1, Pc2, K);
+
+    const double sigma2 = max(4.0, curF.radius);
+    const Eigen::Matrix2d obv2SigmaSquare =
+        Eigen::Matrix2d::Identity() * sigma2 * sigma2;
+    const double h = J_res_rho1.transpose() * J_res_rho1;
+    const Eigen::Matrix<double, 1, 2> A = 1.0 / h * J_res_rho1.transpose();
+    const double variance = A * obv2SigmaSquare * A.transpose();
+    cout << "estIdepth: " << estIdepth << " variance: " << variance << endl;
+    return variance;
 }
 
 void InverseDepthFilter::PrintDebugInfo() {

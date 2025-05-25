@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
         }
         //cv::imshow("debug"+to_string(time), debugImg);
         //cv::waitKey();
-        return FrameData(Rc_w, Pc_w, depth - Pwc.z(), obvEachFrame, time,
+        return FrameData(Rc_w, Pc_w, depth - Pwc.z(), obvEachFrame, noiseStd, time,
                          debugImg);
     };
 

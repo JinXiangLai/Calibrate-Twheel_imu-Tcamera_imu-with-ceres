@@ -10,7 +10,13 @@ struct FrameData {
               const double& height, const std::vector<Eigen::Vector2d>& _obv,
               const double& _t, const cv::Mat& img);
 
-    Eigen::Vector3d GetPw() const { return -Rc_w.transpose() * Pc_w; }
+    FrameData(const Eigen::Matrix3d& _Rc_w, const Eigen::Vector3d& _Pc_w,
+              const double& height, const std::vector<Eigen::Vector2d>& _obv, const double& detectRadius,
+              const double& _t, const cv::Mat& img);
+
+        Eigen::Vector3d GetPw() const {
+        return -Rc_w.transpose() * Pc_w;
+    }
     Eigen::Vector3d GetPc(const Eigen::Vector3d& Pw) const {
         return Rc_w * Pw + Pc_w;
     }
@@ -30,6 +36,7 @@ struct FrameData {
     std::vector<Eigen::Vector2d> obv;
     cv::Mat debugImg;
     Eigen::Vector2d obvNorm;
+    double radius = 3.0;
 };
 
 // 不再被作为先验约束
@@ -97,6 +104,15 @@ struct InverseDepthFilter {
 
     // 坐标系变换（带协方差传播）
     bool TransformHost(const FrameData& curF, const Eigen::Matrix3d& invK);
+
+    double CalculateVariance(const FrameData& curF, const double& estIdepth,
+                             const Eigen::Matrix3d& invK,
+                             const Eigen::Matrix3d& K);
+
+    Eigen::Vector2d CalculateObvWrtIdepth1Jacobian(
+        const Eigen::Matrix3d& Rc2_c1, const Eigen::Vector3d& Pc2_c1,
+        const double& rho1, const Eigen::Vector3d& Pn1,
+        const Eigen::Vector3d& Pc2, const Eigen::Matrix3d& K);
 
     void PrintDebugInfo();
 
