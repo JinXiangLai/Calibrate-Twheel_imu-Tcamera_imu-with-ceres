@@ -85,8 +85,6 @@ struct InverseDepthFilter {
 
     InverseDepthFilter(const FrameData& curF);
 
-    bool Update(const FrameData& curF);
-
     // 鲁棒性更新
     bool UpdateWithRobustCheck(const double& idepthObs,
                                const double& obsNoisepixel,
@@ -98,9 +96,15 @@ struct InverseDepthFilter {
     // 坐标系变换（带协方差传播）
     bool TransformHost(const FrameData& curF, const Eigen::Matrix3d& invK);
 
+    void PrintDebugInfo();
+
     double idepth_ = 1.0;
-    double cov_ = 0.08;  // 默认初始值
+    double cov_ = 0.08;  // 默认初始值，需设置上下限
     bool initialized_ = false;
+
+    double s_ = 1.0;
+    double scov_ = 100 * 100;
+
     FrameData host_;
     FrameData last_;
 };

@@ -51,8 +51,17 @@ int main(int argc, char** argv) {
     // clang-format on
     cout << "Pws:\n" << Pws << endl;
 
+    auto AddNoise2Obv = [](const Eigen::Vector2d& obv) -> Eigen::Vector2d {
+        mt19937 gen(44);
+        const double minNoise = 1.0;
+        normal_distribution<double> dist(0.0, noiseStd);
+        const Eigen::Vector2d noise{dist(gen)+minNoise, dist(gen)+minNoise*0.1};
+        const Eigen::Vector2d obv_noisy = obv + noise;
+        return obv_noisy;
+    };
+
     auto ProjectPws2CurFrame =
-        [&Pws, &depth](const Eigen::Matrix3d& Rwc = Eigen::Matrix3d::Identity(),
+        [&Pws, &depth, &AddNoise2Obv](const Eigen::Matrix3d& Rwc = Eigen::Matrix3d::Identity(),
                        const Eigen::Vector3d& Pwc = {0, 0, 0},
                        const int& time = 0) -> FrameData {
         const Eigen::Matrix3d Rc_w = Rwc.transpose();
@@ -67,9 +76,11 @@ int main(int argc, char** argv) {
             const Eigen::Vector3d& Pw = Pws.col(j);
             // 这里其实也要考虑位姿的扰动误差
             Eigen::Vector2d _obv = ProjectPw2Pixel(Pw, Rc_w, Pc_w, K);
+            //obvEachFrame.push_back(_obv); // 试试不取整数，不影响逆深度方法2的错误
             _obv[0] = int(_obv[0]);
             _obv[1] = int(_obv[1]);
-            obvEachFrame.push_back(_obv);
+            obvEachFrame.push_back(AddNoise2Obv(_obv)); // 试试不取整数
+            //obvEachFrame.push_back(_obv); // 试试不取整数
             cv::circle(debugImg, cv::Point2i(_obv[0], _obv[1]), 1,
                        cv::Scalar(0, 255, 0), -1);
             //cv::circle(debugImg, cv::Point2i(_obv_noisy[0], _obv_noisy[1]), 1,
@@ -79,15 +90,6 @@ int main(int argc, char** argv) {
         //cv::waitKey();
         return FrameData(Rc_w, Pc_w, depth - Pwc.z(), obvEachFrame, time,
                          debugImg);
-    };
-
-    auto AddNoise2Obv = [](const Eigen::Vector2d& obv) -> Eigen::Vector2d {
-        mt19937 gen(44);
-        const double minNoise = 15.0;
-        normal_distribution<double> dist(0.0, noiseStd);
-        const Eigen::Vector2d noise{dist(gen)+minNoise, dist(gen)+minNoise*0.1};
-        const Eigen::Vector2d obv_noisy = obv + noise;
-        return obv_noisy;
     };
 
     // 初始化世界系的位置
@@ -159,7 +161,7 @@ int main(int argc, char** argv) {
             const double A = l2s[i].x(), B = l2s[i].y(), C = l2s[i].z();
             cv::Point2f pl(0, -1), pr(img.cols - 20, -1);
 
-            cout << "l2s[" << i << "]: " << l2s[i].transpose() << endl;
+            //cout << "l2s[" << i << "]: " << l2s[i].transpose() << endl;
             if (abs(A) < kZeroLine && abs(B) < kZeroLine) {
                 continue;
             } else {
@@ -174,7 +176,7 @@ int main(int argc, char** argv) {
                     pl.y = (-C - pl.x * A) / B;
                     pr.y = (-C - pr.x * A) / B;
                 }
-                cout << "pl: " << pl << endl << "pr: " << pr << endl;
+                //cout << "pl: " << pl << endl << "pr: " << pr << endl;
                 //cv::line(img, {int(pl.x), int(pl.y)}, {int(pr.x), int(pr.y)}, {255, 255, 255}, 1);
                 cv::line(img, pl, pr, {255, 255, 255}, 1);
             }
@@ -184,8 +186,8 @@ int main(int argc, char** argv) {
                    cv::Scalar(0, 255, 0), -1);
         cv::circle(img, cv::Point2i(obvs[1].x(), obvs[1].y()), 1, {0, 0, 255},
                    -1);
-        cv::imshow("img", img);
-        cv::waitKey();
+        //cv::imshow("img", img);
+        //cv::waitKey();
 #endif
 
         // 判断是否需要加入该图像到滑窗

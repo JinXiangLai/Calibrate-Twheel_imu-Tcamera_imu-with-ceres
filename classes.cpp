@@ -100,8 +100,11 @@ bool InverseDepthFilter::UpdateWithRobustCheck(const double& idepthObs,
 bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
                                             const Eigen::Matrix3d& invK) {
     // 1.0/ρ1 * Pn1 = R12 * 1.0/ρ2 * Pn2 + P12
-    // [Pn1 - R12*Pn2]_[3x2] * [1.0/ρ1, 1.0/ρ2] = P12
-    Eigen::Matrix<double, 3, 2> A = Eigen::Matrix<double, 3, 2>::Zero();
+    // [Pn1 - R12*Pn2]_[3x2] * [1.0/ρ1, 1.0/ρ2] = P12 (1)
+
+    // [Pn2]x * Pn1 * 1.0/ρ1 = [Pn2]x * P12 
+    // 1.0/ρ1 = ([Pn2]x * Pn1).T * [Pn2]x * P12 / (([Pn2]x * Pn1).T * [Pn2]x * Pn1) (2)
+    // 注意：这里不能再化简，再乘以Pn1.T就变成 0=0了
     const Eigen::Vector3d Pn1 =
         invK * Eigen::Vector3d(host_.obv[0].x(), host_.obv[0].y(), 1.0);
     const Eigen::Vector3d Pn2 =
@@ -109,26 +112,37 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
 
     const Eigen::Matrix3d R12 = host_.Rc_w * curF.Rc_w.transpose();
     const Eigen::Vector3d P12 = host_.Rc_w * (curF.GetPw() - host_.GetPw());
-    A.col(0) = Pn1;
-    A.col(1) = -R12 * Pn2;
-    
-    Eigen::Matrix<double, 3, 2> svdA = skew(P12) * A; // 会丢失深度，即只保留了极线约束
+    // 第一种解法
+    Eigen::Matrix<double, 3, 2> A0 = Eigen::Matrix<double, 3, 2>::Zero();
+    A0.col(0) = Pn1;
+    A0.col(1) = -R12 * Pn2;
+    const Eigen::Vector2d res0 = A0.fullPivHouseholderQr().solve(P12);  // A.jacobiSvd().solve(b);
 
-    Eigen::JacobiSVD<Eigen::Matrix<double, 3, 2>> svd(svdA, Eigen::ComputeFullV);
-    const Eigen::Vector2d singularValues = svd.singularValues();
-    cout << "CalculateInitialInverseDepth singularValues: "
-         << singularValues.transpose() << endl;
-   Eigen::Vector2d res = svd.matrixV().col(1);
-    cout << "svd s1, s2: " << res.transpose() << endl;
+    // 使用B/A计算出来的方法2比上述最小二乘误差大得多的原因不在于输入观测是否有取整数
+    // 理论偏差分析：
+    // 公式 (1)：直接解得，无偏差
+    // 公式 (2)：若P12含平行于Pn2的分量，则会引入系统性，则叉积会丢失该分量，导致解偏离真实值。
+    // 检查公式(2)分母阈值：若<ϵ，判定为退化场景
+    const Eigen::Vector3d temp = skew(Pn2) * Pn1;
+    const double A = temp.dot(temp);
+    const double B = temp.transpose() * (skew(Pn2) * P12);
+    cout << "Pn1: " << Pn1.head(2).transpose()
+         << " Pn2: " << Pn2.head(2).transpose() << " P12: " << P12.transpose()
+         << " A:" << A << " B:" << B << endl;
 
-    res = A.fullPivHouseholderQr().solve(P12);
-    cout << "qr s1, s2: " << res.transpose() << endl;
+    Eigen::Vector2d res(B / A, 0);
+    cout << "res0[0]: " << res0[0] << endl;
+    cout << "res[0]: " << res[0] << endl;
+
+    // 最终还是要使用最小二乘解法
+    res = res0;
 
     if (res[0] < 1.0) {
         return false;
     }
     if (!initialized_) {
         idepth_ = 1 / res[0];
+        s_ = res[0];
         initialized_ = true;
         return true;
     }
@@ -141,7 +155,7 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
     // 原理：根据极线约束，认为在极线上存在N个像素偏差时，会引起深度的多大变化
     // 按照SLAM14讲的做法，不确定引起的原因包括:平移t，初始估计深度值P，然后才是像素扰动，
     // 这样做真的好吗？还是只能使用图优化的方式来实现好呢？
-    const double noiseStd = 3.0;  // pixels
+    const double noiseStd = 3.0;  // pixels,改为检测半径
     const Eigen::Vector3d& t = P12;
     const Eigen::Vector3d p = Pn1 * res[0];
     const Eigen::Vector3d a = p - t;
@@ -164,7 +178,12 @@ bool InverseDepthFilter::UpdateInverseDepth(const FrameData& curF,
     idepth_ = (obvCov_ * idepth_ + cov_ * estIdepth) / denominator;
     cov_ = cov_ * obvCov_ / denominator;
 
-    cout << "idepth_: " << idepth_ << " 1.0/idepth_: " << 1.0/idepth_ << " std: " << sqrt(cov_) << endl;
+    const double obvScov = pow((noiseDepth - res[0]), 2);
+    const double sden = scov_ + obvScov;
+    s_ = (obvScov * s_ + scov_ * res[0]) / sden;
+    scov_ = scov_ * obvScov / sden;
+
+    PrintDebugInfo();
 
     // 这里我们似乎无法计算协方差，应该说，协方差必须与运动是有关系的
     // 那么按理说，如果运动是退化的，那我们假设一个像素偏差，其实就会引起很大的不确定度，
@@ -209,4 +228,13 @@ bool InverseDepthFilter::TransformHost(const FrameData& curF,
     return true;
 }
 
-bool InverseDepthFilter::Update(const FrameData& curF) {}
+void InverseDepthFilter::PrintDebugInfo() {
+    const double id0 = idepth_ - sqrt(cov_), id1 = idepth_ + sqrt(cov_);
+    cout << "Inverse depth info:\nidepth range: [" << id0 << ", " << idepth_
+         << ", " << id1 << "], corresponding depth: [" << 1.0 / id0 << ", "
+         << 1.0 / idepth_ << ", " << 1.0 / id1 << "]" << endl;
+
+    const double d0 = s_ - sqrt(scov_), d1 = s_ + sqrt(scov_);
+    cout << "Depth info:\ndepth s range: [" << d0 << ", " << s_ << ", " << d1
+         << "]" << endl;
+}
