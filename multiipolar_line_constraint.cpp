@@ -24,6 +24,10 @@ const double noiseStdNorm2 = noiseStdNorm * noiseStdNorm;
 constexpr double INF = 1e12;
 constexpr double kZeroLine = 1e-10;
 
+// 地图点所在的深度范围已知
+constexpr double kMinDepth = 10.0;
+constexpr double kMaxDepth = 100.0;
+
 int main(int argc, char** argv) {
     double radius = 3.0;        // 每个marker半径
     double depth = 50.0;        //
@@ -152,6 +156,24 @@ int main(int argc, char** argv) {
         const Eigen::Vector2d predictObv =
             PredictObvByTransform(historyFrame.back(), curFrame, s1);
 
+        auto GetEndPoint = [] (const FrameData& f1, const FrameData& f2, Eigen::Vector2d& e1, Eigen::Vector2d& e2) {
+            const Eigen::Vector2d& obv = f1.obv[0];
+            const Eigen::Vector3d Pn1 = invK * Eigen::Vector3d(obv.x(), obv.y(), 1.0);
+            const Eigen::Matrix3d R21 = f2.Rc_w * f1.Rc_w.transpose();
+            const Eigen::Vector3d P21 = f2.Rc_w * (f1.GetPw() - f2.GetPw());
+
+            const Eigen::Vector3d Pc2_1 = R21 * Pn1 * kMinDepth + P21;
+            const Eigen::Vector3d Pc2_2 = R21 * Pn1 * kMaxDepth + P21;
+            const Eigen::Vector3d Pn2_1 = Pc2_1 / Pc2_1.z();
+            const Eigen::Vector3d Pn2_2 = Pc2_2 / Pc2_2.z();
+
+            e1 = K.block(0, 0, 2, 3) * Pn2_1;
+            e2 = K.block(0, 0, 2, 3) * Pn2_2;
+        };
+
+        Eigen::Vector2d e1, e2;
+        GetEndPoint(historyFrame.back(), curFrame, e1, e2);
+
         if (Pc1_c2.norm() < 0.2) {
             // 使用纯旋转估计误差
             const Eigen::Vector2d est2 =
@@ -215,8 +237,11 @@ int main(int argc, char** argv) {
                    cv::Scalar(0, 255, 0), -1);
         cv::circle(img, cv::Point2i(obvs[1].x(), obvs[1].y()), 1, {0, 0, 255},
                    -1);
-        cv::circle(img, cv::Point2i(predictObv.x(), predictObv.y()), 2,
-                   {0, 255, 255}, -1);
+        //cv::circle(img, cv::Point2i(predictObv.x(), predictObv.y()), 2,
+        //           {0, 255, 255}, -1);
+        cv::circle(img, {int(e1.x()), int(e1.y())}, 3, {0, 255, 255});
+        cv::circle(img, {int(e2.x()), int(e2.y())}, 3, {0, 255, 255});
+        cv::line(img, {int(e1.x()), int(e1.y())}, {int(e2.x()), int(e2.y())}, {255, 255, 255}, 1);
         cv::imshow("img", img);
         cv::waitKey();
 #endif
