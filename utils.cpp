@@ -197,7 +197,7 @@ Eigen::Vector3d EstimatePwInitialValueOnNormPlane(
         Pn = [x, y, 1]
         A = [Pn]x * [R|t] * Pw = [Pn]x * T * Pw = 0，
         系数矩阵关系式为：
-        式(1): y*T[2] - 1*T[1]
+        式(1): y*T[2] - 1*T[1] # 代表[i]一行，每行有4个元素
         式(2): 1*T[0] - x*T[2]
         当仅有绕Z轴的旋转，且沿Z轴运动时：
             |cosθ, -sinθ, 0, tx|

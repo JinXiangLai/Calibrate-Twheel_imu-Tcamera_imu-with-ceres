@@ -118,12 +118,16 @@ struct InverseDepthFilter {
 
     bool CheckVarianceBoundary();
 
+    Eigen::Vector3d GetPw(const Eigen::Vector3d& invK);
+
+    double CalculateDepth(const FrameData& curF, const Eigen::Matrix3d& invK);
+
     double idepth_ = 1.0;
     double var_ = 0.08;  // 默认初始值，需设置上下限
     bool initialized_ = false;
 
-    double s_ = 1.0;
-    double scov_ = 100 * 100;
+    // double s_ = 1.0;
+    // double scov_ = 100 * 100;
 
     FrameData host_;
     FrameData last_;
